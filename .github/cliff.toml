@@ -1,0 +1,52 @@
+[changelog]
+header = ""
+body = """# Changelog
+
+{% if version %}**Version:** `{{ version }}`
+{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }} ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}/commit/{{ commit.id }}))\
+{% endfor %}
+{% endfor %}
+{% if breaking_commits %}
+### 💥 Breaking changes
+{% for commit in breaking_commits %}
+- {{ commit.message | upper_first }} ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}/commit/{{ commit.id }}))
+{% endfor %}
+{% endif %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = true
+filter_commits = true
+topo_order = false
+sort_commits = "newest"
+
+commit_parsers = [
+    # Match conventional-commit-prefixed PR merges.
+    # The (?m) flag enables multi-line mode so `$` matches end-of-line,
+    # not end-of-string. This is required because PR merges often have
+    # multi-line bodies (PR descriptions) following the subject line.
+    { message = '(?m)^feat(\(.+\))?!?:.*\(#\d+\)\s*$',          group = "✨ Features" },
+    { message = '(?m)^fix(\(.+\))?!?:.*\(#\d+\)\s*$',           group = "🐛 Fixes" },
+    { message = '(?m)^perf(\(.+\))?!?:.*\(#\d+\)\s*$',          group = "⚡ Performance" },
+    { message = '(?m)^refactor(\(.+\))?!?:.*\(#\d+\)\s*$',      group = "♻️ Refactor" },
+    { message = '(?m)^docs(\(.+\))?!?:.*\(#\d+\)\s*$',          group = "📝 Docs" },
+    { message = '(?m)^test(\(.+\))?!?:.*\(#\d+\)\s*$',          group = "✅ Tests" },
+    { message = '(?m)^build(\(.+\))?!?:.*\(#\d+\)\s*$',         group = "🏗 Build" },
+    { message = '(?m)^ci(\(.+\))?!?:.*\(#\d+\)\s*$',            group = "🤖 CI" },
+    { message = '(?m)^chore(\(.+\))?!?:.*\(#\d+\)\s*$',         group = "🧹 Chore" },
+    { message = '(?m)^revert(\(.+\))?!?:.*\(#\d+\)\s*$',        group = "↩️ Reverts" },
+
+    # Catch any other PR merge with a non-conventional title.
+    { message = '(?m)^.*\(#\d+\)\s*$',                          group = "📦 Other" },
+
+    # Anything remaining (= individual feature-branch commits, direct pushes) is dropped.
+    { message = '.*',                                           skip = true },
+]

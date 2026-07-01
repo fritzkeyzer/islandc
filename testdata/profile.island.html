@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>Profile</title>
+		<style>
+			.who {
+				display: flex;
+				gap: 12px;
+				align-items: center;
+			}
+			.name {
+				font-weight: 600;
+			}
+			.role {
+				color: #888;
+			}
+			.stats {
+				display: flex;
+				gap: 16px;
+				margin-top: 12px;
+			}
+			.stat .v {
+				font-size: 20px;
+				font-weight: 600;
+			}
+			.stat .l {
+				font-size: 11px;
+				color: #888;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- 1. placeholder DOM — real, styled sample output.
+        Replaced by the renderer at runtime. -->
+		<div id="island-root">
+			<div class="who">
+				<img src="https://i.pravatar.cc/120?img=47" alt="" />
+				<div>
+					<div class="name">Mara Okafor</div>
+					<div class="role">Staff Engineer · Platform</div>
+				</div>
+			</div>
+			<div class="stats">
+				<div class="stat">
+					<div class="v">142</div>
+					<div class="l">commits / week</div>
+				</div>
+				<div class="stat">
+					<div class="v">38</div>
+					<div class="l">reviews / week</div>
+				</div>
+				<div class="stat">
+					<div class="v">11.4</div>
+					<div class="l">p50 latency</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- 2. schema → becomes Go struct -->
+		<script type="application/schema+json" id="island-schema">
+			{
+				"type": "object",
+				"properties": {
+					"name": { "type": "string", "tag": "name" },
+					"role": { "type": "string", "tag": "role" },
+					"avatar": { "type": "string", "tag": "avatar" },
+					"stats": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"properties": {
+								"label": { "type": "string" },
+								"value": { "type": "number" }
+							}
+						}
+					}
+				}
+			}
+		</script>
+
+		<!-- 3. data island — DUMMY JSON in source.
+        Go overwrites the contents at serve time. -->
+		<script type="application/json" id="island-data">
+			{
+				"name": "Mara Okafor",
+				"role": "Staff Engineer · Platform",
+				"avatar": "https://i.pravatar.cc/120?img=47",
+				"stats": [
+					{ "label": "commits / week", "value": 142 },
+					{ "label": "reviews / week", "value": 38 },
+					{ "label": "p50 latency", "value": 11.4 }
+				]
+			}
+		</script>
+
+		<!-- 4. renderer → pure client, replaces #island-root -->
+		<script type="module" data-island-render>
+			const data = JSON.parse(
+				document.getElementById("island-data").textContent,
+			);
+			const root = document.getElementById("island-root");
+			root.innerHTML = `
+      <div class="who">
+        <img src="${data.avatar}" alt="" />
+        <div>
+          <div class="name">${data.name}</div>
+          <div class="role">${data.role}</div>
+        </div>
+      </div>
+      <div class="stats">
+        ${data.stats
+			.map(
+				(s) => `
+          <div class="stat">
+            <div class="v">${s.value}</div>
+            <div class="l">${s.label}</div>
+          </div>
+        `,
+			)
+			.join("")}
+      </div>
+    `;
+		</script>
+	</body>
+</html>

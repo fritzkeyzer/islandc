@@ -1,0 +1,80 @@
+# This workflow automates the creation of git tags and GitHub Releases when a version update is merged to 'main'.
+# It ensures that every production deployment is officially snapshotted and documented.
+#
+# Key features:
+# - Triggers automatically on pushes to 'main' that modify 'version.json'.
+# - Extracts the version number and optional label (e.g., "v1.2.3 — Hotfix") from 'version.json'.
+# - Prevents duplicate tagging if the version has not changed.
+# - Generates final release notes via git-cliff.
+# - Creates a Git tag and a corresponding GitHub Release with the compiled notes.
+#
+# Developer Workflow:
+# - Once the "Release Prod..." PR is merged into 'main', this workflow finalizes the release process.
+# - No manual tagging or release creation is required in the GitHub UI.
+
+name: Tag release on main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - version.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tag-main
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' version.json)
+          LABEL=$(jq -r '.label // ""' version.json)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "label=$LABEL" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if tag already exists
+        id: check
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.version }}" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release notes
+        if: steps.check.outputs.exists == 'false'
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: .github/cliff.toml
+          args: --tag ${{ steps.version.outputs.version }} --unreleased --output release_notes.md
+
+      - name: Create tag and GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          LABEL="${{ steps.version.outputs.label }}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release $VERSION${LABEL:+ — $LABEL}"
+          git push origin "$VERSION"
+
+          gh release create "$VERSION" \
+            --title "$VERSION${LABEL:+ — $LABEL}" \
+            --notes-file release_notes.md
