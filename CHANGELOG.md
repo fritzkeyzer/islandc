@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.0.3] - 2026-07-02
+
+Generated files now embed the source `.island.html` files at compile time
+via `//go:embed` instead of inlining the HTML as a byte literal. This keeps
+the generated Go file small and readable, but requires the source
+`.island.html` files to remain alongside the generated file.
+
+### Changed
+- The generated `var <name>HTML = []byte(...)` byte literal is replaced by
+  a `//go:embed <file>.island.html` directive followed by
+  `var <name>HTML []byte`. The generated file now imports `_ "embed"`.
+- The source `.island.html` files must remain in the same directory as the
+  generated `islandc.gen.go` file (they are referenced by `//go:embed` at
+  compile time, no longer copied into the Go source).
+
 ## [0.0.2] - 2026-07-02
 
 Island names are now normalized to PascalCase, producing idiomatic Go
@@ -65,5 +82,7 @@ island-flavored HTML files.
 - `concept.html` describing the file format and design rationale.
 - `justfile` with a `test` recipe.
 
+[Unreleased]: https://github.com/fritzkeyzer/islandc/releases/tag/v0.0.3
+[0.0.3]: https://github.com/fritzkeyzer/islandc/releases/tag/v0.0.3
 [0.0.2]: https://github.com/fritzkeyzer/islandc/releases/tag/v0.0.2
 [0.0.1]: https://github.com/fritzkeyzer/islandc/releases/tag/v0.0.1

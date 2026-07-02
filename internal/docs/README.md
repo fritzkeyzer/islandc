@@ -4,7 +4,9 @@
 
 `islandc` scans a directory for `*.island.html` files and emits one
 self-contained `islandc.gen.go` per directory. The generated file imports only
-the standard library — it has no runtime dependency on `islandc`.
+the standard library — it has no runtime dependency on `islandc`. The source
+`.island.html` files are embedded at compile time via `//go:embed`, so they
+must remain alongside the generated file.
 
 Each `.island.html` file carries placeholder DOM, a JSON Schema, placeholder
 JSON, and a client render script. `islandc` turns the schema into typed Go

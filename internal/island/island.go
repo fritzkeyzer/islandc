@@ -37,7 +37,8 @@ type File struct {
 	// RenderFunc is the generated Go function name. Defaults to Render<Name>.
 	RenderFunc string
 	// HTML is the source file verbatim, including placeholder JSON.
-	// Embedded as a byte literal in the generated Go file.
+	// Embedded via //go:embed in the generated Go file; the source
+	// .island.html file must remain alongside the generated file.
 	HTML []byte
 	// Schema is the parsed JSON Schema describing the data shape.
 	Schema *Schema

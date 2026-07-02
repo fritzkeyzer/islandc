@@ -1,4 +1,4 @@
 {
-	"version": "v0.0.2",
-	"label": "PascalCase island names"
+	"version": "v0.0.3",
+	"label": "go:embed source HTML"
 }

@@ -52,7 +52,8 @@ func TestGenerate_profileFixture(t *testing.T) {
 		"type ProfileDataStats struct {",
 		"Label string `json:\"label\"`",
 		"Value float64 `json:\"value\"`",
-		"var profileHTML = []byte(",
+		"//go:embed profile.island.html",
+		"var profileHTML []byte",
 		"func RenderProfile(w io.Writer, d ProfileData) error {",
 		"json.Marshal(d)",
 		"injectIsland(w, profileHTML, blob,",
@@ -93,6 +94,11 @@ func TestGenerate_compilesAndRuns(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(viewsDir, "views.go"), out, 0o644); err != nil {
 		t.Fatalf("write views.go: %v", err)
+	}
+	// The generated file embeds the source .island.html via //go:embed,
+	// so the source file must be present alongside views.go at build time.
+	if err := os.WriteFile(filepath.Join(viewsDir, f.Path), f.HTML, 0o644); err != nil {
+		t.Fatalf("write %s: %v", f.Path, err)
 	}
 	driver := `package main
 
@@ -216,8 +222,10 @@ func mkIsland(t *testing.T, name, schema, placeholder string) *island.File {
 
 // writeTempModule writes a self-contained generated views package plus a
 // driver into a temp dir and returns the dir path. The driver source must
-// import "gentest/views".
-func writeTempModule(t *testing.T, generated []byte, driver string) string {
+// import "gentest/views". The source .island.html files are written
+// alongside the generated views.go so //go:embed can find them at build
+// time.
+func writeTempModule(t *testing.T, files []*island.File, generated []byte, driver string) string {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module gentest\n\ngo 1.22\n"), 0o644); err != nil {
@@ -229,6 +237,11 @@ func writeTempModule(t *testing.T, generated []byte, driver string) string {
 	}
 	if err := os.WriteFile(filepath.Join(viewsDir, "views.go"), generated, 0o644); err != nil {
 		t.Fatalf("write views.go: %v", err)
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(viewsDir, f.Path), f.HTML, 0o644); err != nil {
+			t.Fatalf("write %s: %v", f.Path, err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(driver), 0o644); err != nil {
 		t.Fatalf("write main.go: %v", err)
@@ -289,7 +302,7 @@ func main() {
 	fmt.Println("OK")
 }
 `
-	dir := writeTempModule(t, out, driver)
+	dir := writeTempModule(t, []*island.File{f}, out, driver)
 	if build := exec(t, dir, "go", "build", "./..."); build != "" {
 		t.Fatalf("go build failed:\n%s", build)
 	}
@@ -362,7 +375,7 @@ func main() {
 	fmt.Println("OK")
 }
 `
-	dir := writeTempModule(t, out, driver)
+	dir := writeTempModule(t, []*island.File{f}, out, driver)
 	if build := exec(t, dir, "go", "build", "./..."); build != "" {
 		t.Fatalf("go build failed:\n%s", build)
 	}
@@ -437,7 +450,7 @@ func main() {
 	fmt.Println("OK")
 }
 `
-	dir := writeTempModule(t, out, driver)
+	dir := writeTempModule(t, []*island.File{f}, out, driver)
 	if build := exec(t, dir, "go", "build", "./..."); build != "" {
 		t.Fatalf("go build failed:\n%s", build)
 	}
@@ -512,7 +525,7 @@ func main() {
 	fmt.Println("OK")
 }
 `
-	dir := writeTempModule(t, out, driver)
+	dir := writeTempModule(t, []*island.File{counter, todo, chat}, out, driver)
 	if build := exec(t, dir, "go", "build", "./..."); build != "" {
 		t.Fatalf("go build failed:\n%s", build)
 	}

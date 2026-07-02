@@ -3,7 +3,8 @@
 // For each target directory, the generator emits a single .go file containing:
 //
 //   - one typed Data struct per island (inferred from the JSON Schema)
-//   - the source HTML embedded as a byte literal per island
+//   - the source HTML embedded via //go:embed per island (the .island.html
+//     source files must remain alongside the generated file)
 //   - one Render<Name>(w io.Writer, d <Name>Data) error function per island
 //   - the injectIsland runtime helper (written once per generated file)
 //
@@ -58,6 +59,7 @@ func Generate(cfg Config) ([]byte, error) {
 	b.WriteString(pkg)
 	b.WriteString("\n\n")
 	b.WriteString("import (\n")
+	b.WriteString("\t_ \"embed\"\n")
 	b.WriteString("\t\"encoding/json\"\n")
 	b.WriteString("\t\"fmt\"\n")
 	b.WriteString("\t\"io\"\n")
@@ -95,12 +97,16 @@ func emitIsland(b *bytes.Buffer, f *island.File, seen map[string]bool) error {
 		return err
 	}
 
-	// Emit the embedded HTML bytes.
+	// Emit the embedded HTML bytes. The source .island.html file is embedded
+	// via //go:embed at compile time; it must remain in the same directory as
+	// the generated file. injectIsland splices the marshaled data into the
+	// island-data slot at serve time using offsets computed during parsing.
 	htmlVar := unexportName(f.Name) + "HTML"
 	fmt.Fprintf(b, "// %s is the source file verbatim, including the placeholder\n", htmlVar)
 	fmt.Fprintf(b, "// JSON inside the island-data slot. injectIsland overwrites that\n")
 	fmt.Fprintf(b, "// placeholder at serve time.\n")
-	fmt.Fprintf(b, "var %s = []byte(%s)\n\n", htmlVar, goRawString(f.HTML))
+	fmt.Fprintf(b, "//go:embed %s\n", f.Path)
+	fmt.Fprintf(b, "var %s []byte\n\n", htmlVar)
 
 	// Emit the Render function. The injector uses the byte offsets computed
 	// at parse time so it never re-scans the HTML at runtime.
@@ -211,37 +217,6 @@ func emitInjector(b *bytes.Buffer) {
 	b.WriteString("\t_, err := w.Write(html[closeStart:])\n")
 	b.WriteString("\treturn err\n")
 	b.WriteString("}\n")
-}
-
-// goRawString renders a byte slice as a Go backtick raw string literal,
-// falling back to a double-quoted string with escapes if the content
-// contains a backtick.
-func goRawString(src []byte) string {
-	if bytes.IndexByte(src, '`') < 0 {
-		return "`" + string(src) + "`"
-	}
-	// Fall back to a quoted string. strconv.Quote would also escape
-	// non-printables; we keep it simple here since HTML is text.
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range string(src) {
-		switch r {
-		case '"':
-			b.WriteString("\\\"")
-		case '\\':
-			b.WriteString("\\\\")
-		case '\n':
-			b.WriteString("\\n")
-		case '\t':
-			b.WriteString("\\t")
-		case '\r':
-			b.WriteString("\\r")
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte('"')
-	return b.String()
 }
 
 // exportName capitalizes the first rune of s.
