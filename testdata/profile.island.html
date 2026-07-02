@@ -2,31 +2,140 @@
 <html lang="en">
 	<head>
 		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>Profile</title>
 		<style>
-			.who {
-				display: flex;
-				gap: 12px;
-				align-items: center;
+			.island-profile {
+				width: 320px;
+				font-family:
+					ui-sans-serif,
+					system-ui,
+					-apple-system,
+					sans-serif;
+				background: #ffffff;
+				border-radius: 20px;
+				overflow: hidden;
+				box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+				color: #0f172a;
 			}
-			.name {
+			.island-profile .banner {
+				height: 84px;
+				background: linear-gradient(
+					120deg,
+					#6366f1,
+					#8b5cf6 55%,
+					#ec4899
+				);
+				position: relative;
+			}
+			.island-profile .avatar-wrap {
+				position: absolute;
+				left: 50%;
+				top: 84px;
+				transform: translate(-50%, -50%);
+			}
+			.island-profile .avatar-ring {
+				width: 88px;
+				height: 88px;
+				border-radius: 50%;
+				padding: 3px;
+				background: #ffffff;
+				box-shadow: 0 6px 18px rgba(15, 23, 42, 0.25);
+			}
+			.island-profile .avatar-ring img {
+				width: 100%;
+				height: 100%;
+				border-radius: 50%;
+				display: block;
+				object-fit: cover;
+			}
+			.island-profile .status-dot {
+				position: absolute;
+				right: 6px;
+				bottom: 6px;
+				width: 16px;
+				height: 16px;
+				border-radius: 50%;
+				background: #22c55e;
+				border: 3px solid #ffffff;
+			}
+			.island-profile .body {
+				padding: 52px 20px 20px;
+				text-align: center;
+			}
+			.island-profile .name {
+				font-size: 18px;
+				font-weight: 700;
+				letter-spacing: -0.01em;
+			}
+			.island-profile .role {
+				margin-top: 2px;
+				font-size: 13px;
+				color: #64748b;
+			}
+			.island-profile .actions {
+				display: flex;
+				gap: 8px;
+				margin-top: 14px;
+			}
+			.island-profile .actions button {
+				flex: 1;
+				border: none;
+				border-radius: 10px;
+				padding: 9px 0;
+				font-size: 13px;
 				font-weight: 600;
+				cursor: pointer;
+				font-family: inherit;
+				transition:
+					background 0.15s ease,
+					color 0.15s ease,
+					transform 0.08s ease;
 			}
-			.role {
-				color: #888;
+			.island-profile .actions button:active {
+				transform: scale(0.97);
 			}
-			.stats {
+			.island-profile .follow {
+				background: #6366f1;
+				color: #ffffff;
+			}
+			.island-profile .follow:hover {
+				background: #4f46e5;
+			}
+			.island-profile .follow.following {
+				background: #e2e8f0;
+				color: #475569;
+			}
+			.island-profile .message {
+				background: #f1f5f9;
+				color: #334155;
+			}
+			.island-profile .message:hover {
+				background: #e2e8f0;
+			}
+			.island-profile .stats {
 				display: flex;
-				gap: 16px;
-				margin-top: 12px;
+				justify-content: space-around;
+				margin-top: 18px;
+				padding-top: 16px;
+				border-top: 1px solid #e2e8f0;
 			}
-			.stat .v {
+			.island-profile .stat {
+				text-align: center;
+				cursor: default;
+			}
+			.island-profile .stat .v {
 				font-size: 20px;
-				font-weight: 600;
+				font-weight: 700;
+				font-variant-numeric: tabular-nums;
+				color: #0f172a;
 			}
-			.stat .l {
+			.island-profile .stat .l {
+				margin-top: 2px;
 				font-size: 11px;
-				color: #888;
+				letter-spacing: 0.04em;
+				text-transform: uppercase;
+				color: #94a3b8;
 			}
 		</style>
 	</head>
@@ -34,25 +143,35 @@
 		<!-- 1. placeholder DOM — real, styled sample output.
         Replaced by the renderer at runtime. -->
 		<div id="island-root">
-			<div class="who">
-				<img src="https://i.pravatar.cc/120?img=47" alt="" />
-				<div>
+			<div class="island-profile">
+				<div class="banner"></div>
+				<div class="avatar-wrap">
+					<div class="avatar-ring">
+						<img src="https://i.pravatar.cc/120?img=47" alt="" />
+						<div class="status-dot"></div>
+					</div>
+				</div>
+				<div class="body">
 					<div class="name">Mara Okafor</div>
 					<div class="role">Staff Engineer · Platform</div>
-				</div>
-			</div>
-			<div class="stats">
-				<div class="stat">
-					<div class="v">142</div>
-					<div class="l">commits / week</div>
-				</div>
-				<div class="stat">
-					<div class="v">38</div>
-					<div class="l">reviews / week</div>
-				</div>
-				<div class="stat">
-					<div class="v">11.4</div>
-					<div class="l">p50 latency</div>
+					<div class="actions">
+						<button class="follow">Follow</button>
+						<button class="message">Message</button>
+					</div>
+					<div class="stats">
+						<div class="stat">
+							<div class="v">142</div>
+							<div class="l">commits / week</div>
+						</div>
+						<div class="stat">
+							<div class="v">38</div>
+							<div class="l">reviews / week</div>
+						</div>
+						<div class="stat">
+							<div class="v">11.4</div>
+							<div class="l">p50 latency</div>
+						</div>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -100,27 +219,75 @@
 				document.getElementById("island-data").textContent,
 			);
 			const root = document.getElementById("island-root");
-			root.innerHTML = `
-      <div class="who">
-        <img src="${data.avatar}" alt="" />
-        <div>
-          <div class="name">${data.name}</div>
-          <div class="role">${data.role}</div>
-        </div>
-      </div>
-      <div class="stats">
-        ${data.stats
-			.map(
-				(s) => `
-          <div class="stat">
-            <div class="v">${s.value}</div>
-            <div class="l">${s.label}</div>
-          </div>
-        `,
-			)
-			.join("")}
-      </div>
-    `;
+
+			// Format a stat value: integers stay integers, decimals keep one place.
+			const fmt = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+
+			// Count-up animation: tweens each stat from 0 to its value.
+			function animateStats() {
+				const els = root.querySelectorAll(".stat .v");
+				els.forEach((el, i) => {
+					const target = data.stats[i].value;
+					const duration = 700;
+					const start = performance.now();
+					const step = (now) => {
+						const t = Math.min(1, (now - start) / duration);
+						const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+						const cur = target * eased;
+						el.textContent = fmt(
+							Number.isInteger(target) ? Math.round(cur) : cur,
+						);
+						if (t < 1) requestAnimationFrame(step);
+						else el.textContent = fmt(target);
+					};
+					requestAnimationFrame(step);
+				});
+			}
+
+			function render() {
+				root.innerHTML = `
+					<div class="island-profile">
+						<div class="banner"></div>
+						<div class="avatar-wrap">
+							<div class="avatar-ring">
+								<img src="${data.avatar}" alt="" />
+								<div class="status-dot"></div>
+							</div>
+						</div>
+						<div class="body">
+							<div class="name">${data.name}</div>
+							<div class="role">${data.role}</div>
+							<div class="actions">
+								<button class="follow">Follow</button>
+								<button class="message">Message</button>
+							</div>
+							<div class="stats">
+								${data.stats
+									.map(
+										(s) => `
+									<div class="stat">
+										<div class="v">0</div>
+										<div class="l">${s.label}</div>
+									</div>
+								`,
+									)
+									.join("")}
+							</div>
+						</div>
+					</div>
+				`;
+				animateStats();
+			}
+
+			// Follow toggle: flips between Follow and Following on click.
+			root.addEventListener("click", (e) => {
+				const btn = e.target.closest(".follow");
+				if (!btn) return;
+				const following = btn.classList.toggle("following");
+				btn.textContent = following ? "Following" : "Follow";
+			});
+
+			render();
 		</script>
 	</body>
 </html>

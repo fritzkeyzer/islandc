@@ -9,8 +9,9 @@
 //
 // Plus a root mount element with id="island-root" holding placeholder DOM.
 //
-// The island name is inferred from the filename (e.g. profile.island.html
-// -> name "profile", func RenderProfile, type ProfileData).
+// The island name is inferred from the filename and normalized to PascalCase
+// (e.g. profile.island.html -> "Profile", user_card.island.html -> "UserCard"),
+// producing idiomatic Go identifiers: RenderUserCard, UserCardData.
 //
 // The parser locates these by byte scan, not DOM parse, so it never
 // interprets markup. It returns a File describing the island plus the
@@ -28,8 +29,10 @@ import (
 type File struct {
 	// Path is the source file path relative to the target dir.
 	Path string
-	// Name is the island name, derived from the filename.
-	// Used in generated identifiers: ProfileData, RenderProfile, profileHTML.
+	// Name is the island name in PascalCase, derived from the filename.
+	// Used in generated identifiers: ProfileData, RenderProfile, profileHTML;
+	// user_card.island.html -> UserCard -> RenderUserCard, UserCardData,
+	// userCardHTML.
 	Name string
 	// RenderFunc is the generated Go function name. Defaults to Render<Name>.
 	RenderFunc string
@@ -65,10 +68,11 @@ type Schema struct {
 // (best-effort: it unmarshals the placeholder into interface{} and checks the
 // top-level keys against schema properties).
 //
-// The island name is inferred from the filename: profile.island.html -> "profile".
+// The island name is inferred from the filename and normalized to PascalCase:
+// profile.island.html -> "Profile", user_card.island.html -> "UserCard".
 func Parse(path string, src []byte) (*File, error) {
 	name := deriveName(path)
-	renderFunc := "Render" + exportName(name)
+	renderFunc := "Render" + name
 
 	schemaStart, schemaEnd, ok := locateScript(src, `type="application/schema+json"`, "id=\"island-schema\"")
 	if !ok {
@@ -251,7 +255,10 @@ func checkShape(value interface{}, schema *Schema, path string) error {
 	return nil
 }
 
-// deriveName turns "profile.island.html" into "profile".
+// deriveName turns a filename into a PascalCase island name:
+// "profile.island.html" -> "Profile", "user_card.island.html" -> "UserCard",
+// "user-card.island.html" -> "UserCard". The result is suitable for Go
+// exported identifiers (RenderUserCard, UserCardData).
 func deriveName(path string) string {
 	base := path
 	if i := strings.LastIndexAny(base, "/\\"); i >= 0 {
@@ -267,15 +274,27 @@ func deriveName(path string) string {
 	if i := strings.IndexByte(base, '.'); i >= 0 {
 		base = base[:i]
 	}
-	return base
+	return toPascalCase(base)
 }
 
-// exportName capitalizes the first rune, for Go exported identifiers.
-func exportName(s string) string {
-	if s == "" {
-		return ""
+// toPascalCase converts a snake_case or kebab-case identifier to PascalCase.
+// Each segment separated by '_' or '-' has its first rune uppercased; the
+// rest of the segment is preserved. Already-PascalCase input is unchanged,
+// so "UserCard" stays "UserCard" and "profile" becomes "Profile".
+func toPascalCase(s string) string {
+	var b strings.Builder
+	startWord := true
+	for _, r := range s {
+		if r == '_' || r == '-' {
+			startWord = true
+			continue
+		}
+		if startWord {
+			b.WriteRune([]rune(strings.ToUpper(string(r)))[0])
+			startWord = false
+		} else {
+			b.WriteRune(r)
+		}
 	}
-	r := []rune(s)
-	r[0] = []rune(strings.ToUpper(string(r[0])))[0]
-	return string(r)
+	return b.String()
 }

@@ -84,7 +84,7 @@ func Generate(cfg Config) ([]byte, error) {
 }
 
 func emitIsland(b *bytes.Buffer, f *island.File, seen map[string]bool) error {
-	dataName := exportName(f.Name) + "Data"
+	dataName := f.Name + "Data"
 	if seen[dataName] {
 		return fmt.Errorf("duplicate generated type %q (from %s)", dataName, f.Path)
 	}

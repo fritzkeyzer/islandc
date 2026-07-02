@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Color Picker</title>
+		<style>
+			.island-color {
+				width: 280px;
+				font-family: ui-sans-serif, system-ui, sans-serif;
+				background: #111827;
+				color: #e5e7eb;
+				border-radius: 16px;
+				overflow: hidden;
+				box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+			}
+			.island-color .swatch {
+				height: 120px;
+				background: hsl(210, 80%, 55%);
+				transition: background 0.15s ease;
+			}
+			.island-color .controls {
+				padding: 16px;
+				display: flex;
+				flex-direction: column;
+				gap: 14px;
+			}
+			.island-color .row {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+			}
+			.island-color .row label {
+				width: 14px;
+				font-size: 12px;
+				font-weight: 700;
+				color: #9ca3af;
+			}
+			.island-color input[type="range"] {
+				flex: 1;
+				accent-color: #6366f1;
+			}
+			.island-color .val {
+				width: 42px;
+				text-align: right;
+				font-variant-numeric: tabular-nums;
+				font-size: 13px;
+				color: #d1d5db;
+			}
+			.island-color .hex {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				padding: 10px 14px;
+				background: #0b1220;
+				font-family: ui-monospace, SFMono-Regular, monospace;
+				font-size: 14px;
+			}
+			.island-color .hex button {
+				border: none;
+				background: #6366f1;
+				color: white;
+				padding: 4px 10px;
+				border-radius: 6px;
+				font-size: 12px;
+				cursor: pointer;
+			}
+			.island-color .hex button:hover {
+				background: #4f46e5;
+			}
+			.island-color .presets {
+				display: flex;
+				gap: 8px;
+				padding: 0 16px 16px;
+				flex-wrap: wrap;
+			}
+			.island-color .presets button {
+				width: 28px;
+				height: 28px;
+				border-radius: 50%;
+				border: 2px solid transparent;
+				cursor: pointer;
+				padding: 0;
+			}
+			.island-color .presets button:hover {
+				border-color: #e5e7eb;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- 1. Root mount — placeholder DOM, replaced at runtime. -->
+		<div id="island-root">
+			<div class="island-color">
+				<div class="swatch"></div>
+				<div class="controls">
+					<div class="row">
+						<label>H</label>
+						<input type="range" min="0" max="360" value="210" />
+						<span class="val">210</span>
+					</div>
+					<div class="row">
+						<label>S</label>
+						<input type="range" min="0" max="100" value="80" />
+						<span class="val">80</span>
+					</div>
+					<div class="row">
+						<label>L</label>
+						<input type="range" min="0" max="100" value="55" />
+						<span class="val">55</span>
+					</div>
+				</div>
+				<div class="hex">
+					<span>#3b82f6</span>
+					<button>copy</button>
+				</div>
+				<div class="presets"></div>
+			</div>
+		</div>
+
+		<!-- 2. Schema → becomes Go struct. -->
+		<script type="application/schema+json" id="island-schema">
+			{
+				"type": "object",
+				"properties": {
+					"h": { "type": "integer", "tag": "h" },
+					"s": { "type": "integer", "tag": "s" },
+					"l": { "type": "integer", "tag": "l" },
+					"presets": {
+						"type": "array",
+						"tag": "presets",
+						"items": {
+							"type": "object",
+							"properties": {
+								"name": { "type": "string", "tag": "name" },
+								"h": { "type": "integer", "tag": "h" },
+								"s": { "type": "integer", "tag": "s" },
+								"l": { "type": "integer", "tag": "l" }
+							}
+						}
+					}
+				}
+			}
+		</script>
+
+		<!-- 3. Data island — placeholder JSON in source. -->
+		<script type="application/json" id="island-data">
+			{
+				"h": 210,
+				"s": 80,
+				"l": 55,
+				"presets": [
+					{ "name": "ocean", "h": 210, "s": 80, "l": 55 },
+					{ "name": "sunset", "h": 18, "s": 90, "l": 58 },
+					{ "name": "forest", "h": 140, "s": 60, "l": 45 },
+					{ "name": "grape", "h": 270, "s": 65, "l": 55 },
+					{ "name": "gold", "h": 45, "s": 95, "l": 55 }
+				]
+			}
+		</script>
+
+		<!-- 4. Render script — pure client, rewrites #island-root. -->
+		<script type="module" data-island-render>
+			const data = JSON.parse(
+				document.getElementById("island-data").textContent,
+			);
+			const root = document.getElementById("island-root");
+
+			let state = { ...data };
+
+			// hsl → hex (each channel 0..255)
+			function hslToHex(h, s, l) {
+				s /= 100;
+				l /= 100;
+				const k = (n) => (n + h / 30) % 12;
+				const a = s * Math.min(l, 1 - l);
+				const f = (n) =>
+					Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+				return (
+					"#" +
+					[f(0), f(8), f(4)]
+						.map((x) => x.toString(16).padStart(2, "0"))
+						.join("")
+				);
+			}
+
+			function render() {
+				const hex = hslToHex(state.h, state.s, state.l);
+				const presets = state.presets
+					.map(
+						(p, i) => `
+						<button
+							data-preset="${i}"
+							style="background:hsl(${p.h}, ${p.s}%, ${p.l}%)"
+							title="${p.name}"
+						></button>
+					`,
+					)
+					.join("");
+
+				root.innerHTML = `
+					<div class="island-color">
+						<div class="swatch" style="background:hsl(${state.h}, ${state.s}%, ${state.l}%)"></div>
+						<div class="controls">
+							<div class="row">
+								<label>H</label>
+								<input type="range" min="0" max="360" value="${state.h}" data-channel="h" />
+								<span class="val">${state.h}</span>
+							</div>
+							<div class="row">
+								<label>S</label>
+								<input type="range" min="0" max="100" value="${state.s}" data-channel="s" />
+								<span class="val">${state.s}</span>
+							</div>
+							<div class="row">
+								<label>L</label>
+								<input type="range" min="0" max="100" value="${state.l}" data-channel="l" />
+								<span class="val">${state.l}</span>
+							</div>
+						</div>
+						<div class="hex">
+							<span>${hex}</span>
+							<button data-copy="${hex}">copy</button>
+						</div>
+						<div class="presets">${presets}</div>
+					</div>
+				`;
+			}
+
+			root.addEventListener("input", (e) => {
+				const ch = e.target?.dataset?.channel;
+				if (!ch) return;
+				state[ch] = Number(e.target.value);
+				render();
+				// keep focus on the slider that was being dragged
+				const sel = root.querySelector(`input[data-channel="${ch}"]`);
+				sel?.focus();
+			});
+
+			root.addEventListener("click", (e) => {
+				const preset = e.target?.dataset?.preset;
+				if (preset !== undefined) {
+					const p = state.presets[preset];
+					state.h = p.h;
+					state.s = p.s;
+					state.l = p.l;
+					render();
+					return;
+				}
+				const copy = e.target?.dataset?.copy;
+				if (copy) {
+					navigator.clipboard?.writeText(copy);
+					e.target.textContent = "copied!";
+					setTimeout(() => render(), 800);
+				}
+			});
+
+			render();
+		</script>
+	</body>
+</html>

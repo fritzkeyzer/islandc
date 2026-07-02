@@ -27,21 +27,15 @@ islandc target/dir
 
 This writes `target/dir/islandc.gen.go`. Flags:
 
-| Flag  | Default           | Description                                            |
-| ----- | ----------------- | ------------------------------------------------------ |
-| `-pkg`| dir base name     | Go package name for the generated file                 |
-| `-out`| `islandc.gen.go`  | Name of the generated Go file (written in each dir)    |
-| `-r`  | `false`           | Recurse into subdirectories; one `.go` file per dir    |
-| `-q`  | `false`           | Suppress progress output                               |
+| Flag   | Default          | Description                                                   |
+|--------|------------------|---------------------------------------------------------------|
+| `-pkg` | dir base name    | Optional: Go package name for the generated file              |
+| `-out` | `islandc.gen.go` | Optional: Name of the generated Go file (written in each dir) |
+| `-r`   | `false`          | Optional: Recurse into subdirectories; one `.go` file per dir |
+| `-q`   | `false`          | Optional: Suppress progress output                            |
 
 Example:
 
 ```sh
 islandc -pkg views -r ./web
-```
-
-## Development
-
-```sh
-just test   # go install + run islandc against testdata + go test ./...
 ```

@@ -15,8 +15,8 @@ func TestParse_profileFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if f.Name != "profile" {
-		t.Errorf("Name = %q, want %q", f.Name, "profile")
+	if f.Name != "Profile" {
+		t.Errorf("Name = %q, want %q", f.Name, "Profile")
 	}
 	if f.RenderFunc != "RenderProfile" {
 		t.Errorf("RenderFunc = %q, want %q", f.RenderFunc, "RenderProfile")
@@ -183,10 +183,31 @@ func TestParse_nameInferredFromFilename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if f.Name != "user_card" {
-		t.Errorf("Name = %q, want %q", f.Name, "user_card")
+	if f.Name != "UserCard" {
+		t.Errorf("Name = %q, want %q", f.Name, "UserCard")
 	}
-	if f.RenderFunc != "RenderUser_card" {
-		t.Errorf("RenderFunc = %q, want %q", f.RenderFunc, "RenderUser_card")
+	if f.RenderFunc != "RenderUserCard" {
+		t.Errorf("RenderFunc = %q, want %q", f.RenderFunc, "RenderUserCard")
+	}
+}
+
+func TestParse_namePascalCaseFromKebab(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<div id="island-root"></div>
+<script type="application/schema+json" id="island-schema">
+{"type":"object","properties":{"a":{"type":"string"}}}
+</script>
+<script type="application/json" id="island-data">{"a":"hi"}</script>
+<script type="module" data-island-render></script>
+</body></html>`)
+	f, err := Parse("user-card.island.html", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if f.Name != "UserCard" {
+		t.Errorf("Name = %q, want %q", f.Name, "UserCard")
+	}
+	if f.RenderFunc != "RenderUserCard" {
+		t.Errorf("RenderFunc = %q, want %q", f.RenderFunc, "RenderUserCard")
 	}
 }

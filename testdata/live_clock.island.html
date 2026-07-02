@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Live Clock</title>
+		<style>
+			.island-clock {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				gap: 8px;
+				padding: 24px 32px;
+				background: radial-gradient(circle at 30% 20%, #1e293b, #020617);
+				color: #e2e8f0;
+				border-radius: 18px;
+				font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+				box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+				user-select: none;
+			}
+			.island-clock .time {
+				font-size: 44px;
+				font-weight: 700;
+				letter-spacing: 2px;
+				font-variant-numeric: tabular-nums;
+			}
+			.island-clock .date {
+				font-size: 13px;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+				color: #94a3b8;
+			}
+			.island-clock .ampm {
+				font-size: 16px;
+				color: #64748b;
+			}
+			.island-clock .row {
+				display: flex;
+				align-items: baseline;
+				gap: 10px;
+			}
+			.island-clock .toggle {
+				margin-top: 6px;
+				border: 1px solid #334155;
+				background: transparent;
+				color: #cbd5e1;
+				padding: 4px 12px;
+				border-radius: 999px;
+				font-size: 12px;
+				cursor: pointer;
+				font-family: inherit;
+			}
+			.island-clock .toggle:hover {
+				background: #1e293b;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- 1. Root mount — placeholder DOM, replaced at runtime. -->
+		<div id="island-root">
+			<div class="island-clock">
+				<div class="time">--:--:--</div>
+				<div class="date">—</div>
+			</div>
+		</div>
+
+		<!-- 2. Schema → becomes Go struct. -->
+		<script type="application/schema+json" id="island-schema">
+			{
+				"type": "object",
+				"properties": {
+					"timezone": { "type": "string", "tag": "timezone" },
+					"hour24": { "type": "boolean", "tag": "hour24" },
+					"tickHz": { "type": "number", "tag": "tickHz" }
+				}
+			}
+		</script>
+
+		<!-- 3. Data island — placeholder JSON in source. -->
+		<script type="application/json" id="island-data">
+			{
+				"timezone": "UTC",
+				"hour24": true,
+				"tickHz": 1
+			}
+		</script>
+
+		<!-- 4. Render script — pure client, rewrites #island-root. -->
+		<script type="module" data-island-render>
+			const data = JSON.parse(
+				document.getElementById("island-data").textContent,
+			);
+			const root = document.getElementById("island-root");
+
+			let state = { ...data };
+
+			function fmt(now) {
+				const opts = {
+					timeZone: state.timezone === "local" ? undefined : state.timezone,
+					hour: state.hour24 ? "2-digit" : "2-digit",
+					hour12: !state.hour24,
+					minute: "2-digit",
+					second: "2-digit",
+				};
+				let time = new Intl.DateTimeFormat("en-GB", opts).format(now);
+				let ampm = "";
+				if (!state.hour24) {
+					const h = now.getHours();
+					ampm = h < 12 ? "AM" : "PM";
+				}
+				const date = new Intl.DateTimeFormat("en-US", {
+					weekday: "short",
+					day: "2-digit",
+					month: "short",
+					year: "numeric",
+				}).format(now);
+				return { time, ampm, date };
+			}
+
+			function render() {
+				const { time, ampm, date } = fmt(new Date());
+				root.innerHTML = `
+					<div class="island-clock">
+						<div class="row">
+							<div class="time">${time}</div>
+							${ampm ? `<div class="ampm">${ampm}</div>` : ""}
+						</div>
+						<div class="date">${date}</div>
+						<button class="toggle" data-toggle>
+							${state.hour24 ? "switch to 12-hour" : "switch to 24-hour"}
+						</button>
+					</div>
+				`;
+			}
+
+			root.addEventListener("click", (e) => {
+				if (e.target?.dataset?.toggle !== undefined) {
+					state.hour24 = !state.hour24;
+					render();
+				}
+			});
+
+			render();
+			// tickHz controls how often the clock refreshes.
+			const ms = Math.max(50, Math.round(1000 / (state.tickHz || 1)));
+			setInterval(render, ms);
+		</script>
+	</body>
+</html>

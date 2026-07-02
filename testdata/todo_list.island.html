@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Todo List</title>
+		<style>
+			.island-todo {
+				width: 320px;
+				font-family: ui-sans-serif, system-ui, sans-serif;
+				background: #ffffff;
+				border-radius: 14px;
+				box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+				overflow: hidden;
+			}
+			.island-todo header {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 14px 16px;
+				background: #0f172a;
+				color: #f8fafc;
+			}
+			.island-todo header h2 {
+				margin: 0;
+				font-size: 15px;
+				font-weight: 600;
+			}
+			.island-todo header .badge {
+				font-size: 12px;
+				background: #334155;
+				padding: 2px 8px;
+				border-radius: 999px;
+				color: #cbd5e1;
+			}
+			.island-todo form {
+				display: flex;
+				gap: 8px;
+				padding: 12px 16px;
+				border-bottom: 1px solid #e2e8f0;
+			}
+			.island-todo input[type="text"] {
+				flex: 1;
+				padding: 8px 10px;
+				border: 1px solid #cbd5e1;
+				border-radius: 8px;
+				font-size: 14px;
+				outline: none;
+			}
+			.island-todo input[type="text"]:focus {
+				border-color: #6366f1;
+			}
+			.island-todo form button {
+				border: none;
+				background: #6366f1;
+				color: white;
+				padding: 8px 14px;
+				border-radius: 8px;
+				font-size: 14px;
+				font-weight: 600;
+				cursor: pointer;
+			}
+			.island-todo form button:hover {
+				background: #4f46e5;
+			}
+			.island-todo ul {
+				list-style: none;
+				margin: 0;
+				padding: 6px 0;
+				max-height: 240px;
+				overflow-y: auto;
+			}
+			.island-todo li {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				padding: 8px 16px;
+				font-size: 14px;
+				color: #1e293b;
+			}
+			.island-todo li:hover {
+				background: #f8fafc;
+			}
+			.island-todo li .check {
+				width: 18px;
+				height: 18px;
+				border: 2px solid #cbd5e1;
+				border-radius: 5px;
+				cursor: pointer;
+				flex-shrink: 0;
+				display: grid;
+				place-items: center;
+			}
+			.island-todo li.done .check {
+				background: #22c55e;
+				border-color: #22c55e;
+				color: white;
+			}
+			.island-todo li.done .text {
+				text-decoration: line-through;
+				color: #94a3b8;
+			}
+			.island-todo li .text {
+				flex: 1;
+			}
+			.island-todo li .del {
+				border: none;
+				background: transparent;
+				color: #cbd5e1;
+				cursor: pointer;
+				font-size: 16px;
+			}
+			.island-todo li .del:hover {
+				color: #ef4444;
+			}
+			.island-todo footer {
+				padding: 8px 16px;
+				font-size: 12px;
+				color: #94a3b8;
+				border-top: 1px solid #e2e8f0;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- 1. Root mount — placeholder DOM, replaced at runtime. -->
+		<div id="island-root">
+			<div class="island-todo">
+				<header>
+					<h2>Today</h2>
+					<span class="badge">0 / 0</span>
+				</header>
+				<form>
+					<input type="text" placeholder="Add a task…" />
+					<button>Add</button>
+				</form>
+				<ul>
+					<li class="done">
+						<span class="check">✓</span>
+						<span class="text">write tests</span>
+						<button class="del">×</button>
+					</li>
+				</ul>
+				<footer>0 of 0 done</footer>
+			</div>
+		</div>
+
+		<!-- 2. Schema → becomes Go struct. -->
+		<script type="application/schema+json" id="island-schema">
+			{
+				"type": "object",
+				"properties": {
+					"title": { "type": "string", "tag": "title" },
+					"items": {
+						"type": "array",
+						"tag": "items",
+						"items": {
+							"type": "object",
+							"properties": {
+								"text": { "type": "string", "tag": "text" },
+								"done": { "type": "boolean", "tag": "done" }
+							}
+						}
+					}
+				}
+			}
+		</script>
+
+		<!-- 3. Data island — placeholder JSON in source. -->
+		<script type="application/json" id="island-data">
+			{
+				"title": "Today",
+				"items": [
+					{ "text": "write tests", "done": true },
+					{ "text": "ship it", "done": false },
+					{ "text": "celebrate", "done": false }
+				]
+			}
+		</script>
+
+		<!-- 4. Render script — pure client, rewrites #island-root. -->
+		<script type="module" data-island-render>
+			const data = JSON.parse(
+				document.getElementById("island-data").textContent,
+			);
+			const root = document.getElementById("island-root");
+
+			let state = { title: data.title, items: [...data.items] };
+
+			function doneCount() {
+				return state.items.filter((i) => i.done).length;
+			}
+
+			function render() {
+				const items = state.items
+					.map(
+						(item, i) => `
+						<li class="${item.done ? "done" : ""}">
+							<span class="check" data-toggle="${i}">${item.done ? "✓" : ""}</span>
+							<span class="text">${item.text}</span>
+							<button class="del" data-del="${i}">×</button>
+						</li>
+					`,
+					)
+					.join("");
+
+				root.innerHTML = `
+					<div class="island-todo">
+						<header>
+							<h2>${state.title}</h2>
+							<span class="badge">${doneCount()} / ${state.items.length}</span>
+						</header>
+						<form>
+							<input type="text" placeholder="Add a task…" />
+							<button>Add</button>
+						</form>
+						<ul>${items}</ul>
+						<footer>${doneCount()} of ${state.items.length} done</footer>
+					</div>
+				`;
+				root.querySelector("input")?.focus();
+			}
+
+			root.addEventListener("click", (e) => {
+				const t = e.target;
+				const toggle = t?.dataset?.toggle;
+				const del = t?.dataset?.del;
+				if (toggle !== undefined) {
+					state.items[toggle].done = !state.items[toggle].done;
+					render();
+				}
+				if (del !== undefined) {
+					state.items.splice(del, 1);
+					render();
+				}
+			});
+
+			root.addEventListener("submit", (e) => {
+				e.preventDefault();
+				const input = root.querySelector("input[type=text]");
+				const text = input.value.trim();
+				if (!text) return;
+				state.items.push({ text, done: false });
+				render();
+			});
+
+			render();
+		</script>
+	</body>
+</html>

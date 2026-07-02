@@ -12,7 +12,7 @@ profile.island.html
 └── 4. Render script      <script type="module" data-island-render>                 client JS, reads #island-data, rewrites #island-root
 ```
 
-The island name is inferred from the filename: `profile.island.html` → `profile`, generating `ProfileData` and `RenderProfile`.
+The island name is inferred from the filename and normalized to PascalCase: `profile.island.html` → `Profile`, `user_card.island.html` → `UserCard`, generating `ProfileData`/`RenderProfile` and `UserCardData`/`RenderUserCard` respectively.
 
 ## Conventions
 
