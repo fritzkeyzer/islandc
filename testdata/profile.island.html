@@ -140,8 +140,7 @@
 		</style>
 	</head>
 	<body>
-		<!-- 1. placeholder DOM — real, styled sample output.
-        Replaced by the renderer at runtime. -->
+		<!-- Root mount — placeholder DOM. Replaced by the renderer at runtime. -->
 		<div id="island-root">
 			<div class="island-profile">
 				<div class="banner"></div>
@@ -176,31 +175,9 @@
 			</div>
 		</div>
 
-		<!-- 2. schema → becomes Go struct -->
-		<script type="application/schema+json" id="island-schema">
-			{
-				"type": "object",
-				"properties": {
-					"name": { "type": "string", "tag": "name" },
-					"role": { "type": "string", "tag": "role" },
-					"avatar": { "type": "string", "tag": "avatar" },
-					"stats": {
-						"type": "array",
-						"items": {
-							"type": "object",
-							"properties": {
-								"label": { "type": "string" },
-								"value": { "type": "number" }
-							}
-						}
-					}
-				}
-			}
-		</script>
-
-		<!-- 3. data island — DUMMY JSON in source.
-        Go overwrites the contents at serve time. -->
-		<script type="application/json" id="island-data">
+		<!-- Data island — inert JSON. islandc replaces the body with
+	             json.Marshal(d) at serve time. -->
+		<script id="island-data" type="application/json">
 			{
 				"name": "Mara Okafor",
 				"role": "Staff Engineer · Platform",
@@ -213,11 +190,9 @@
 			}
 		</script>
 
-		<!-- 4. renderer → pure client, replaces #island-root -->
+		<!-- Renderer → pure client, replaces #island-root -->
 		<script type="module" data-island-render>
-			const data = JSON.parse(
-				document.getElementById("island-data").textContent,
-			);
+			const data = JSON.parse(document.getElementById("island-data").textContent);
 			const root = document.getElementById("island-root");
 
 			// Format a stat value: integers stay integers, decimals keep one place.

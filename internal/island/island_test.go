@@ -1,10 +1,19 @@
 package island
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// wrap builds a minimal island file around the given data-island body.
+func wrap(body string) []byte {
+	return []byte(`<!DOCTYPE html><html><body>
+<script id="island-data" type="application/json">` + body + `</script>
+</body></html>`)
+}
 
 func TestParse_profileFixture(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "profile.island.html"))
@@ -15,199 +24,290 @@ func TestParse_profileFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if f.Name != "Profile" {
-		t.Errorf("Name = %q, want %q", f.Name, "Profile")
-	}
-	if f.RenderFunc != "RenderProfile" {
-		t.Errorf("RenderFunc = %q, want %q", f.RenderFunc, "RenderProfile")
+	if f.Name != "Profile" || f.RenderFunc != "RenderProfile" {
+		t.Errorf("Name/RenderFunc = %q/%q", f.Name, f.RenderFunc)
 	}
 	if f.Schema == nil || f.Schema.Type != "object" {
-		t.Fatalf("Schema not parsed: %+v", f.Schema)
+		t.Fatalf("Schema not inferred: %+v", f.Schema)
 	}
 	if _, ok := f.Schema.Properties["name"]; !ok {
 		t.Errorf("schema missing 'name' property")
 	}
-	if _, ok := f.Schema.Properties["stats"]; !ok {
-		t.Errorf("schema missing 'stats' property")
-	}
-	if f.Schema.Properties["stats"].Items == nil {
+	if s := f.Schema.Properties["stats"]; s == nil || s.Items == nil {
 		t.Errorf("stats schema missing items")
 	}
 
-	// Splice bounds must point at the island-data slot.
-	prefix := f.HTML[:f.DataOpen]
-	suffix := f.HTML[f.DataClose:]
-	if !contains(prefix, []byte(`id="island-data"`)) {
-		t.Errorf("DataOpen does not include the island-data opening tag")
+	// Splice bounds are the whole script body: the generated code
+	// regenerates json.Marshal(data) between the tags.
+	body := f.HTML[f.DataOpen:f.DataClose]
+	if !bytes.Contains(body, []byte(`"name"`)) {
+		t.Errorf("body must contain the placeholder JSON; got %q", body)
 	}
-	if !contains(suffix, []byte("</script>")) {
-		t.Errorf("DataClose does not start at the closing script tag")
+	if !bytes.Contains(f.HTML[:f.DataOpen], []byte(`id="island-data"`)) {
+		t.Errorf("DataOpen does not follow the island-data opening tag")
 	}
-	// The placeholder JSON must be the bytes between the bounds.
-	middle := f.HTML[f.DataOpen:f.DataClose]
-	if !contains(middle, []byte("Mara Okafor")) {
-		t.Errorf("placeholder JSON not between splice bounds; got %q", middle)
+	if !bytes.Contains(f.HTML[:f.DataOpen], []byte(`type="application/json"`)) {
+		t.Errorf("DataOpen does not follow the type attribute")
+	}
+	if !bytes.HasPrefix(f.HTML[f.DataClose:], []byte("</script>")) {
+		t.Errorf("DataClose must point at the closing tag; got %q", f.HTML[f.DataClose:f.DataClose+12])
 	}
 }
 
-func contains(hay, needle []byte) bool {
-	return string(hay) != "" && bytesIndex(hay, needle) >= 0
+func TestParse_infersTypesFromPlaceholder(t *testing.T) {
+	f, err := Parse("x.island.html", wrap(`
+{
+	"a": "hi",
+	"b": 42,
+	"c": 3.14,
+	"d": true,
+	"e": [{ "x": 1, "y": "z" }]
 }
-
-func bytesIndex(hay, needle []byte) int {
-	for i := 0; i+len(needle) <= len(hay); i++ {
-		match := true
-		for j := 0; j < len(needle); j++ {
-			if hay[i+j] != needle[j] {
-				match = false
-				break
-			}
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	p := f.Schema.Properties
+	for k, want := range map[string]string{"a": "string", "b": "integer", "c": "number", "d": "boolean", "e": "array"} {
+		if p[k].Type != want {
+			t.Errorf("%s: got %q, want %q", k, p[k].Type, want)
 		}
-		if match {
-			return i
-		}
 	}
-	return -1
+	items := p["e"].Items
+	if items == nil || items.Type != "object" {
+		t.Fatalf("e items: got %+v, want object", items)
+	}
+	if items.Properties["x"].Type != "integer" || items.Properties["y"].Type != "string" {
+		t.Errorf("e[] fields: %+v", items.Properties)
+	}
 }
 
-func TestParse_missingSchema(t *testing.T) {
-	src := []byte(`<!DOCTYPE html><html><body>
+func TestParse_promotesIntToNumberAcrossArrayElements(t *testing.T) {
+	f, err := Parse("x.island.html", wrap(`{"vals":[{"v":1},{"v":2.5}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := f.Schema.Properties["vals"].Items.Properties["v"].Type; got != "number" {
+		t.Errorf("v: got %q, want number", got)
+	}
+}
+
+func TestParse_mixedArrayTypesIsError(t *testing.T) {
+	_, err := Parse("x.island.html", wrap(`{"vals":[1, "a"]}`))
+	if err == nil || !strings.Contains(err.Error(), "mixed array element types") {
+		t.Fatalf("expected mixed-type error, got %v", err)
+	}
+}
+
+func TestParse_extractsComments(t *testing.T) {
+	f, err := Parse("x.island.html", wrap(`
+{
+	"a": 1, // the first field
+	"b": "x", /* the second field */
+	"c": {
+		"a": 2, // nested a
+	},
+	"d": true // last, no comma
+}
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	p := f.Schema.Properties
+	for k, want := range map[string]string{
+		"a": "the first field",
+		"b": "the second field",
+		"d": "last, no comma",
+	} {
+		if p[k].Comment != want {
+			t.Errorf("%s comment = %q, want %q", k, p[k].Comment, want)
+		}
+	}
+	// Nested duplicate key gets its own comment, not the outer one.
+	if got := p["c"].Properties["a"].Comment; got != "nested a" {
+		t.Errorf("c.a comment = %q, want %q", got, "nested a")
+	}
+}
+
+func TestParse_allowsTrailingCommas(t *testing.T) {
+	f, err := Parse("x.island.html", wrap(`{"a": 1, "b": [1, 2,],}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if f.Schema.Properties["b"].Items.Type != "integer" {
+		t.Errorf("b items: %+v", f.Schema.Properties["b"].Items)
+	}
+}
+
+func TestParse_dataScriptMustHaveTypeJSON(t *testing.T) {
+	cases := []struct {
+		name string
+		html string
+	}{
+		{
+			"missing type attr",
+			`<!DOCTYPE html><html><body>
 <div id="island-root"></div>
-<script type="application/json" id="island-data">{"a":1}</script>
-<script type="module" data-island-render></script>
-</body></html>`)
-	_, err := Parse("x.island.html", src)
-	if err == nil {
-		t.Fatal("expected error for missing schema, got nil")
+<script id="island-data">{"a":"hi"}</script>
+</body></html>`,
+		},
+		{
+			"wrong type (module)",
+			`<!DOCTYPE html><html><body>
+<div id="island-root"></div>
+<script id="island-data" type="module">{"a":"hi"}</script>
+</body></html>`,
+		},
+		{
+			"old executable format",
+			`<!DOCTYPE html><html><body>
+<div id="island-root"></div>
+<script id="island-data" type="text/javascript">window.X = {"a":"hi"};</script>
+</body></html>`,
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Parse("x.island.html", []byte(c.html))
+			if err == nil {
+				t.Fatal("expected error for wrong/missing type, got nil")
+			}
+			if !strings.Contains(err.Error(), `type="application/json"`) {
+				t.Errorf("error should mention required type; got %v", err)
+			}
+		})
 	}
 }
 
 func TestParse_missingData(t *testing.T) {
-	src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">
-{"type":"object","properties":{"a":{"type":"string"}}}
-</script>
-<script type="module" data-island-render></script>
-</body></html>`)
-	_, err := Parse("x.island.html", src)
-	if err == nil {
+	src := []byte(`<!DOCTYPE html><html><body><div id="island-root"></div></body></html>`)
+	if _, err := Parse("x.island.html", src); err == nil {
 		t.Fatal("expected error for missing data island, got nil")
 	}
 }
 
-func TestParse_missingRenderScript(t *testing.T) {
-	src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">
-{"type":"object","properties":{"a":{"type":"string"}}}
-</script>
-<script type="application/json" id="island-data">{"a":"hi"}</script>
-</body></html>`)
-	_, err := Parse("x.island.html", src)
-	if err == nil {
-		t.Fatal("expected error for missing render script, got nil")
+func TestParse_emptyDataObject(t *testing.T) {
+	if _, err := Parse("x.island.html", wrap(`{}`)); err == nil {
+		t.Fatal("expected error for empty data object, got nil")
 	}
 }
 
-func TestParse_missingRoot(t *testing.T) {
-	src := []byte(`<!DOCTYPE html><html><body>
-<script type="application/schema+json" id="island-schema">
-{"type":"object","properties":{"a":{"type":"string"}}}
-</script>
-<script type="application/json" id="island-data">{"a":"hi"}</script>
-<script type="module" data-island-render></script>
-</body></html>`)
-	_, err := Parse("x.island.html", src)
-	if err == nil {
-		t.Fatal("expected error for missing root mount, got nil")
+func TestParse_invalidPlaceholder(t *testing.T) {
+	if _, err := Parse("x.island.html", wrap(`{not json}`)); err == nil {
+		t.Fatal("expected error for invalid placeholder, got nil")
 	}
 }
 
-func TestParse_emptyDataSlot(t *testing.T) {
-	src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">
-{"type":"object","properties":{"a":{"type":"string"}}}
-</script>
-<script type="application/json" id="island-data">   </script>
-<script type="module" data-island-render></script>
-</body></html>`)
-	_, err := Parse("x.island.html", src)
-	if err == nil {
-		t.Fatal("expected error for empty data slot, got nil")
+func TestParse_nonObjectPlaceholder(t *testing.T) {
+	if _, err := Parse("x.island.html", wrap(`[1,2,3]`)); err == nil {
+		t.Fatal("expected error for non-object placeholder, got nil")
 	}
 }
 
-func TestParse_invalidPlaceholderJSON(t *testing.T) {
+func TestParse_attributeQuotingVariants(t *testing.T) {
 	src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">
-{"type":"object","properties":{"a":{"type":"string"}}}
-</script>
-<script type="application/json" id="island-data">{not json}</script>
-<script type="module" data-island-render></script>
+<script  id = 'island-data' type = 'application/json' >{"a":"hi"}</script>
 </body></html>`)
-	_, err := Parse("x.island.html", src)
-	if err == nil {
-		t.Fatal("expected error for invalid placeholder JSON, got nil")
+	if _, err := Parse("x.island.html", src); err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
 }
 
-func TestParse_shapeMismatch(t *testing.T) {
-	// schema says a is string; placeholder has a as object -> mismatch
-	src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">
-{"type":"object","properties":{"a":{"type":"string"}}}
-</script>
-<script type="application/json" id="island-data">{"a":{"x":1}}</script>
-<script type="module" data-island-render></script>
-</body></html>`)
-	_, err := Parse("x.island.html", src)
-	if err == nil {
-		t.Fatal("expected shape mismatch error, got nil")
+func TestParse_nameNormalization(t *testing.T) {
+	for file, want := range map[string]string{
+		"user_card.island.html": "UserCard",
+		"user-card.island.html": "UserCard",
+		"profile.island.html":   "Profile",
+	} {
+		f, err := Parse(file, wrap(`{"a":"hi"}`))
+		if err != nil {
+			t.Fatalf("Parse %s: %v", file, err)
+		}
+		if f.Name != want {
+			t.Errorf("%s: Name = %q, want %q", file, f.Name, want)
+		}
 	}
 }
 
-func TestParse_nameInferredFromFilename(t *testing.T) {
+func TestParse_findsCDNDeps(t *testing.T) {
 	src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">
-{"type":"object","properties":{"a":{"type":"string"}}}
-</script>
-<script type="application/json" id="island-data">{"a":"hi"}</script>
-<script type="module" data-island-render></script>
+<link rel="stylesheet" href="https://cdn.example.com/base.css" />
+<script src="https://cdn.example.com/util.js" defer></script>
+<script id="island-data" type="application/json">{"a":"hi"}</script>
 </body></html>`)
-	f, err := Parse("user_card.island.html", src)
+	f, err := Parse("widget.island.html", src)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if f.Name != "UserCard" {
-		t.Errorf("Name = %q, want %q", f.Name, "UserCard")
+	if len(f.Deps) != 2 {
+		t.Fatalf("got %d deps, want 2: %+v", len(f.Deps), f.Deps)
 	}
-	if f.RenderFunc != "RenderUserCard" {
-		t.Errorf("RenderFunc = %q, want %q", f.RenderFunc, "RenderUserCard")
+	css, js := f.Deps[0], f.Deps[1]
+	if css.Kind != DepCSS || css.URL != "https://cdn.example.com/base.css" {
+		t.Errorf("css dep = %+v", css)
+	}
+	if js.Kind != DepJS || js.URL != "https://cdn.example.com/util.js" {
+		t.Errorf("js dep = %+v", js)
+	}
+	if got := string(src[css.TagStart:css.TagEnd]); got != `<link rel="stylesheet" href="https://cdn.example.com/base.css" />` {
+		t.Errorf("css tag = %q", got)
+	}
+	if got := string(src[js.TagStart:js.TagEnd]); got != `<script src="https://cdn.example.com/util.js" defer></script>` {
+		t.Errorf("js tag = %q", got)
+	}
+	if js.ScriptOpenTag != "<script defer>" {
+		t.Errorf("js open tag = %q, want %q", js.ScriptOpenTag, "<script defer>")
 	}
 }
 
-func TestParse_namePascalCaseFromKebab(t *testing.T) {
+func TestParse_ignoresNonCDNDeps(t *testing.T) {
 	src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">
-{"type":"object","properties":{"a":{"type":"string"}}}
-</script>
-<script type="application/json" id="island-data">{"a":"hi"}</script>
-<script type="module" data-island-render></script>
+<link rel="stylesheet" href="/abs/style.css" />
+<link rel="stylesheet" href="./relative.css" />
+<link rel="stylesheet" href="//cdn.example.com/proto.css" />
+<script src="./local.js"></script>
+<script src="data:text/javascript,alert(1)"></script>
+<script data-src="https://cdn.example.com/not-a-dep.js"></script>
+<script id="island-data" type="application/json">{"a":"hi"}</script>
 </body></html>`)
-	f, err := Parse("user-card.island.html", src)
+	f, err := Parse("x.island.html", src)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if f.Name != "UserCard" {
-		t.Errorf("Name = %q, want %q", f.Name, "UserCard")
+	if len(f.Deps) != 0 {
+		t.Errorf("got %d deps, want 0 (non-CDN refs must be ignored): %+v", len(f.Deps), f.Deps)
 	}
-	if f.RenderFunc != "RenderUserCard" {
-		t.Errorf("RenderFunc = %q, want %q", f.RenderFunc, "RenderUserCard")
+}
+
+func TestParse_recordsDuplicateDepOccurrences(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<link rel="stylesheet" href="https://cdn.example.com/base.css" />
+<link rel="stylesheet" href="https://cdn.example.com/base.css" />
+<script id="island-data" type="application/json">{"a":"hi"}</script>
+</body></html>`)
+	f, err := Parse("x.island.html", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(f.Deps) != 2 || f.Deps[0].TagStart == f.Deps[1].TagStart {
+		t.Fatalf("want 2 distinct occurrences, got %+v", f.Deps)
+	}
+}
+
+func TestParse_ignoresURLsInsideScriptContent(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<script id="island-data" type="application/json">{"a":"hi"}</script>
+<script type="module">
+	const s = '<link rel="stylesheet" href="https://cdn.example.com/fake.css">';
+	console.log(s);
+</script>
+</body></html>`)
+	f, err := Parse("x.island.html", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(f.Deps) != 0 {
+		t.Errorf("got %d deps, want 0 (tags inside script raw text are not deps): %+v", len(f.Deps), f.Deps)
 	}
 }

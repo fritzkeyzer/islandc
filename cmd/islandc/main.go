@@ -1,10 +1,12 @@
-// Command islandc generates self-contained Go handlers from .island.html files.
+// Command islandc generates Go code from .island.html files.
 //
-// See the project README and concept.html for the file format. In short:
-// each .island.html file carries placeholder DOM, a JSON Schema, placeholder
-// JSON, and a render script. islandc emits one .go file per target directory
-// with typed structs, embedded HTML bytes, and Render<Name> functions that
-// splice marshaled data into the island-data slot at serve time.
+// An .island.html file is HTML with one convention: a data island
+// (<script id="island-data" type="application/json"> with a JWCC object
+// body). islandc infers the schema from the placeholder, emits typed
+// structs + Render<Name> functions that replace the data island body with
+// json.Marshal(data) at serve time. Everything else in the file is userspace.
+//
+// See ISLAND_FLAVOURED_HTML.md for the full spec.
 package main
 
 import (

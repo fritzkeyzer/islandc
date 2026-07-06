@@ -1,277 +1,382 @@
-// Package island parses islandc-flavored .html files.
-//
-// An island file is plain HTML with four recognized conventions:
-//
-//   - A schema block:  <script type="application/schema+json" id="island-schema"> ... </script>
-//   - A data island:   <script type="application/json" id="island-data"> ... </script>
-//     (holds placeholder JSON in source; Go overwrites it at serve time)
-//   - A render script: <script type="module" data-island-render> ... </script>
-//
-// Plus a root mount element with id="island-root" holding placeholder DOM.
-//
-// The island name is inferred from the filename and normalized to PascalCase
-// (e.g. profile.island.html -> "Profile", user_card.island.html -> "UserCard"),
-// producing idiomatic Go identifiers: RenderUserCard, UserCardData.
-//
-// The parser locates these by byte scan, not DOM parse, so it never
-// interprets markup. It returns a File describing the island plus the
-// raw HTML bytes (verbatim, including placeholder JSON) for embedding.
+// Package island parses .island.html files: HTML with one convention — a
+// data island (<script id="island-data" type="application/json"> with a JWCC
+// object body). The schema is inferred from the placeholder; trailing
+// comments become Go doc comments. CDN deps (http(s) <link>/<script src>) are
+// detected for optional vendoring via --resolve-deps.
 package island
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
+
+	"github.com/tailscale/hujson"
+	"golang.org/x/net/html"
 )
 
-// File is a parsed islandc-flavored HTML file.
+// File is one parsed .island.html file.
 type File struct {
-	// Path is the source file path relative to the target dir.
+	// Path is the source file path as given to Parse.
 	Path string
-	// Name is the island name in PascalCase, derived from the filename.
-	// Used in generated identifiers: ProfileData, RenderProfile, profileHTML;
-	// user_card.island.html -> UserCard -> RenderUserCard, UserCardData,
-	// userCardHTML.
+	// Name is the PascalCase island name derived from the filename.
 	Name string
-	// RenderFunc is the generated Go function name. Defaults to Render<Name>.
+	// RenderFunc is the generated Go function name: Render<Name>.
 	RenderFunc string
-	// HTML is the source file verbatim, including placeholder JSON.
-	// Embedded via //go:embed in the generated Go file; the source
-	// .island.html file must remain alongside the generated file.
+	// HTML is the source file verbatim, including placeholder data.
 	HTML []byte
-	// Schema is the parsed JSON Schema describing the data shape.
+	// Schema is the data shape inferred from the placeholder literal.
 	Schema *Schema
-	// DataOpen is the byte offset where the island-data slot's opening
-	// tag ends inside HTML. The injector splices the marshaled blob here.
-	DataOpen int
-	// DataClose is the byte offset of the island-data slot's closing
-	// </script> tag inside HTML.
-	DataClose int
+	// DataOpen and DataClose are the byte offsets of the data island
+	// script's inner body within HTML. The generated code replaces the
+	// whole body with json.Marshal(data) at serve time.
+	DataOpen, DataClose int
+	// Deps are the CDN lib imports found in the file, in document order.
+	Deps []DepRef
 }
 
-// Schema is a minimal JSON Schema subset sufficient for Go struct generation.
-//
-// Supported types: string, number, integer, boolean, array, object.
-// "properties" defines nested fields. "items" defines array element shape.
+// DepKind identifies the kind of a CDN lib import.
+type DepKind string
+
+const (
+	DepCSS DepKind = "css"
+	DepJS  DepKind = "js"
+)
+
+// DepRef is one occurrence of a CDN lib import.
+type DepRef struct {
+	URL  string
+	Kind DepKind
+	// TagStart and TagEnd delimit the whole tag within HTML: for CSS the
+	// <link ...> tag, for JS the <script ...>...</script> block.
+	TagStart, TagEnd int
+	// ScriptOpenTag is a rebuilt <script ...> opening tag with the src
+	// attribute dropped, used when inlining the dep content. Empty for CSS.
+	ScriptOpenTag string
+}
+
+// Schema is a minimal description of a data shape sufficient for Go struct
+// generation, inferred from the placeholder literal.
 type Schema struct {
-	Type       string             `json:"type"`
-	Properties map[string]*Schema `json:"properties,omitempty"`
-	Items      *Schema            `json:"items,omitempty"`
-	// Tag overrides the json tag for this property. Optional.
-	Tag string `json:"tag,omitempty"`
+	Type       string
+	Properties map[string]*Schema
+	Items      *Schema
+	// Comment is the trailing // or /* */ comment on the property, emitted
+	// as a Go doc comment on the generated field.
+	Comment string
 }
 
-// Parse parses a single islandc-flavored HTML file.
-//
-// It validates that all required conventions are present and that the
-// placeholder JSON in the island-data slot is shape-compatible with the schema
-// (best-effort: it unmarshals the placeholder into interface{} and checks the
-// top-level keys against schema properties).
-//
-// The island name is inferred from the filename and normalized to PascalCase:
-// profile.island.html -> "Profile", user_card.island.html -> "UserCard".
-func Parse(path string, src []byte) (*File, error) {
-	name := deriveName(path)
-	renderFunc := "Render" + name
+// Parse scans src (the contents of an .island.html file) and returns a File
+// describing the island.
+func Parse(filePath string, src []byte) (*File, error) {
+	name := deriveName(filePath)
 
-	schemaStart, schemaEnd, ok := locateScript(src, `type="application/schema+json"`, "id=\"island-schema\"")
+	doc, err := scan(src)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", filePath, err)
+	}
+	if !doc.foundData {
+		return nil, fmt.Errorf("%s: data island not found (need <script id=\"island-data\" type=\"application/json\">)", filePath)
+	}
+
+	body := src[doc.dataOpen:doc.dataClose]
+	v, err := hujson.Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("%s: island-data placeholder is not valid JWCC: %w", filePath, err)
+	}
+	obj, ok := v.Value.(*hujson.Object)
 	if !ok {
-		return nil, fmt.Errorf("%s: schema block not found (need <script type=\"application/schema+json\" id=\"island-schema\">)", path)
+		return nil, fmt.Errorf("%s: island-data placeholder must be a JSON object literal", filePath)
 	}
-	var schema Schema
-	if err := json.Unmarshal(src[schemaStart:schemaEnd], &schema); err != nil {
-		return nil, fmt.Errorf("%s: schema block is not valid JSON: %w", path, err)
+	if len(obj.Members) == 0 {
+		return nil, fmt.Errorf("%s: island-data placeholder object is empty", filePath)
 	}
-	if schema.Type != "object" {
-		return nil, fmt.Errorf("%s: schema root type must be \"object\", got %q", path, schema.Type)
-	}
-	if len(schema.Properties) == 0 {
-		return nil, fmt.Errorf("%s: schema has no properties", path)
-	}
-
-	dataStart, dataEnd, ok := locateScript(src, `type="application/json"`, "id=\"island-data\"")
-	if !ok {
-		return nil, fmt.Errorf("%s: data island not found (need <script type=\"application/json\" id=\"island-data\">)", path)
-	}
-	placeholder := bytes.TrimSpace(src[dataStart:dataEnd])
-	if len(placeholder) == 0 {
-		return nil, fmt.Errorf("%s: island-data slot is empty; it must hold placeholder JSON in source", path)
-	}
-	var placeholderAny interface{}
-	if err := json.Unmarshal(placeholder, &placeholderAny); err != nil {
-		return nil, fmt.Errorf("%s: island-data placeholder is not valid JSON: %w", path, err)
-	}
-	if err := checkShape(placeholderAny, &schema, ""); err != nil {
-		return nil, fmt.Errorf("%s: placeholder/data shape mismatch: %w", path, err)
-	}
-
-	// The render script must be present. We do not parse or execute it; we
-	// only require its existence so the generated file is meaningful.
-	if !hasRenderScript(src) {
-		return nil, fmt.Errorf("%s: render script not found (need <script type=\"module\" data-island-render>)", path)
-	}
-
-	// The root mount must exist.
-	if !bytes.Contains(src, []byte(`id="island-root"`)) && !bytes.Contains(src, []byte(`id='island-root'`)) {
-		return nil, fmt.Errorf("%s: root mount not found (need an element with id=\"island-root\")", path)
-	}
-
-	// Compute splice offsets relative to the full HTML bytes. locateScript
-	// returned offsets relative to the inner content; we need the absolute
-	// byte offsets of the opening tag end and the closing tag start so the
-	// injector can splice:  html[:openEnd] + blob + html[closeStart:]
-	openTagEnd, closeTagStart, ok := locateScriptBounds(src, `type="application/json"`, "id=\"island-data\"")
-	if !ok {
-		return nil, fmt.Errorf("%s: island-data: internal error locating tag bounds", path)
+	schema, err := inferObject(obj)
+	if err != nil {
+		return nil, fmt.Errorf("%s: island-data: %w", filePath, err)
 	}
 
 	return &File{
-		Path:       path,
+		Path:       filePath,
 		Name:       name,
-		RenderFunc: renderFunc,
+		RenderFunc: "Render" + name,
 		HTML:       src,
-		Schema:     &schema,
-		DataOpen:   openTagEnd,
-		DataClose:  closeTagStart,
+		Schema:     schema,
+		DataOpen:   doc.dataOpen,
+		DataClose:  doc.dataClose,
+		Deps:       doc.deps,
 	}, nil
 }
 
-// locateScript finds a <script ...>...</script> block whose opening tag
-// contains all of the given needle substrings (in any order). Returns the
-// byte offsets of the inner content (exclusive of the tags) relative to src.
-func locateScript(src []byte, needles ...string) (int, int, bool) {
-	openEnd, closeStart, ok := locateScriptBounds(src, needles...)
-	if !ok {
-		return 0, 0, false
-	}
-	return openEnd, closeStart, true
+// doc holds the results of one tokenizer pass over the HTML.
+type doc struct {
+	foundData           bool
+	dataOpen, dataClose int
+	deps                []DepRef
 }
 
-// locateScriptBounds returns the absolute byte offset just past the opening
-// <script ...> tag (openEnd) and the absolute byte offset of the closing
-// </script> tag (closeStart). The inner content is src[openEnd:closeStart].
-func locateScriptBounds(src []byte, needles ...string) (int, int, bool) {
-	i := 0
+// pendingScript tracks a <script ...> start tag until its matching </script>.
+// The tokenizer treats script content as raw text, so nothing inside can be
+// mistaken for a tag.
+type pendingScript struct {
+	tagStart int    // start of the <script ...> tag
+	openEnd  int    // just past the opening tag
+	isData   bool   // id="island-data"
+	srcURL   string // http(s) src attribute, if any
+	openTag  string // rebuilt open tag without src (for dep inlining)
+}
+
+// scan tokenizes src once, locating the island-data script body bounds and
+// all CDN dep imports. Byte offsets are recovered from the tokenizer's raw
+// output.
+func scan(src []byte) (*doc, error) {
+	z := html.NewTokenizer(bytes.NewReader(src))
+	d := &doc{}
+	offset := 0
+	var script *pendingScript
+
 	for {
-		s := bytes.Index(src[i:], []byte("<script"))
-		if s < 0 {
-			return 0, 0, false
-		}
-		s += i
-		// find end of opening tag
-		gt := bytes.IndexByte(src[s:], '>')
-		if gt < 0 {
-			return 0, 0, false
-		}
-		openTag := src[s : s+gt] // without the '>'
-		openEnd := s + gt + 1
-		// check needles
-		match := true
-		for _, n := range needles {
-			if !bytes.Contains(openTag, []byte(n)) {
-				match = false
-				break
-			}
-		}
-		i = openEnd
-		if !match {
-			continue
-		}
-		// find closing </script>
-		c := bytes.Index(src[openEnd:], []byte("</script>"))
-		if c < 0 {
-			return 0, 0, false
-		}
-		closeStart := openEnd + c
-		return openEnd, closeStart, true
-	}
-}
+		tt := z.Next()
+		raw := z.Raw()
+		start := offset
+		offset += len(raw)
 
-func hasRenderScript(src []byte) bool {
-	_, _, ok := locateScript(src, `type="module"`, "data-island-render")
-	return ok
-}
+		switch tt {
+		case html.ErrorToken:
+			if script != nil {
+				return nil, fmt.Errorf("unclosed <script> tag")
+			}
+			return d, nil
 
-// checkShape is a best-effort, recursive check that a placeholder value is
-// shape-compatible with a schema. It verifies object keys, array nesting,
-// and scalar types. The placeholder is sample data; the authoritative type
-// safety comes from the generated Go struct, but this check catches obvious
-// drift between the schema and the placeholder JSON early.
-func checkShape(value interface{}, schema *Schema, path string) error {
-	if schema == nil {
-		return nil
-	}
-	switch schema.Type {
-	case "string":
-		if _, ok := value.(string); !ok {
-			return fmt.Errorf("%s: expected string, got %T", path, value)
-		}
-	case "number":
-		if _, ok := value.(float64); !ok {
-			return fmt.Errorf("%s: expected number, got %T", path, value)
-		}
-	case "integer":
-		f, ok := value.(float64)
-		if !ok {
-			return fmt.Errorf("%s: expected integer, got %T", path, value)
-		}
-		if f != float64(int64(f)) {
-			return fmt.Errorf("%s: expected integer, got non-integer number %v", path, f)
-		}
-	case "boolean":
-		if _, ok := value.(bool); !ok {
-			return fmt.Errorf("%s: expected boolean, got %T", path, value)
-		}
-	case "object":
-		m, ok := value.(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("%s: expected object, got %T", path, value)
-		}
-		for k, sub := range schema.Properties {
-			v, present := m[k]
-			if !present {
-				// missing keys are allowed; the renderer handles absent data
-				continue
-			}
-			if err := checkShape(v, sub, path+"."+k); err != nil {
-				return err
-			}
-		}
-	case "array":
-		arr, ok := value.([]interface{})
-		if !ok {
-			return fmt.Errorf("%s: expected array, got %T", path, value)
-		}
-		if schema.Items != nil {
-			for idx, v := range arr {
-				if err := checkShape(v, schema.Items, fmt.Sprintf("%s[%d]", path, idx)); err != nil {
-					return err
+		case html.StartTagToken, html.SelfClosingTagToken:
+			tag, attrs := tagAttrs(z)
+			switch tag {
+			case "link":
+				if attrs["rel"] == "stylesheet" && isCDNURL(attrs["href"]) {
+					d.deps = append(d.deps, DepRef{
+						URL: attrs["href"], Kind: DepCSS,
+						TagStart: start, TagEnd: offset,
+					})
+				}
+			case "script":
+				if tt == html.SelfClosingTagToken {
+					break
+				}
+				script = &pendingScript{tagStart: start, openEnd: offset}
+				if attrs["id"] == "island-data" {
+					if d.foundData {
+						return nil, fmt.Errorf("multiple island-data scripts")
+					}
+					if attrs["type"] != "application/json" {
+						return nil, fmt.Errorf("island-data script must have type=\"application/json\" (got %q); the body is a JWCC object literal, not executable JS", attrs["type"])
+					}
+					script.isData = true
+				} else if isCDNURL(attrs["src"]) {
+					script.srcURL = attrs["src"]
+					script.openTag = rebuildTag("script", attrs, "src")
 				}
 			}
+
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			if string(name) != "script" || script == nil {
+				continue
+			}
+			if script.isData {
+				d.foundData = true
+				d.dataOpen = script.openEnd
+				d.dataClose = start
+			} else if script.srcURL != "" {
+				d.deps = append(d.deps, DepRef{
+					URL: script.srcURL, Kind: DepJS,
+					TagStart: script.tagStart, TagEnd: offset,
+					ScriptOpenTag: script.openTag,
+				})
+			}
+			script = nil
 		}
-	default:
-		return fmt.Errorf("%s: unsupported schema type %q", path, schema.Type)
 	}
-	return nil
+}
+
+// tagAttrs reads the current tag's name and attributes from the tokenizer.
+// Attribute keys are lowercased by the tokenizer.
+func tagAttrs(z *html.Tokenizer) (string, map[string]string) {
+	name, hasAttr := z.TagName()
+	attrs := map[string]string{}
+	for hasAttr {
+		var k, v []byte
+		k, v, hasAttr = z.TagAttr()
+		attrs[string(k)] = string(v)
+	}
+	return string(name), attrs
+}
+
+// rebuildTag reconstructs an opening tag from parsed attributes, dropping the
+// named attribute. Attribute order is not preserved from the source; values
+// are double-quoted with '"' escaped as &quot;.
+func rebuildTag(name string, attrs map[string]string, drop string) string {
+	var b strings.Builder
+	b.WriteByte('<')
+	b.WriteString(name)
+	for _, k := range sortedKeys(attrs) {
+		if k == drop {
+			continue
+		}
+		b.WriteByte(' ')
+		b.WriteString(k)
+		if v := attrs[k]; v != "" {
+			b.WriteString(`="`)
+			b.WriteString(strings.ReplaceAll(v, `"`, "&quot;"))
+			b.WriteByte('"')
+		}
+	}
+	b.WriteByte('>')
+	return b.String()
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func isCDNURL(v string) bool {
+	return strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://")
+}
+
+// inferObject builds an object Schema from a hujson object, attaching each
+// member's trailing comment (same line, after the value) as its Comment.
+func inferObject(obj *hujson.Object) (*Schema, error) {
+	s := &Schema{Type: "object", Properties: map[string]*Schema{}}
+	for i, m := range obj.Members {
+		key := m.Name.Value.(hujson.Literal).String()
+		sub, err := inferValue(m.Value.Value)
+		if err != nil {
+			return nil, fmt.Errorf("property %q: %w", key, err)
+		}
+		next := hujson.Extra(obj.AfterExtra)
+		if i+1 < len(obj.Members) {
+			next = obj.Members[i+1].Name.BeforeExtra
+		}
+		sub.Comment = trailingComment(m.Value.AfterExtra, next)
+		s.Properties[key] = sub
+	}
+	return s, nil
+}
+
+func inferValue(v hujson.ValueTrimmed) (*Schema, error) {
+	switch x := v.(type) {
+	case hujson.Literal:
+		switch x.Kind() {
+		case '"':
+			return &Schema{Type: "string"}, nil
+		case 't', 'f':
+			return &Schema{Type: "boolean"}, nil
+		case '0':
+			if bytes.ContainsAny(x, ".eE") {
+				return &Schema{Type: "number"}, nil
+			}
+			return &Schema{Type: "integer"}, nil
+		default:
+			return nil, fmt.Errorf("cannot infer type from %q", string(x))
+		}
+	case *hujson.Object:
+		return inferObject(x)
+	case *hujson.Array:
+		var items *Schema
+		for _, el := range x.Elements {
+			sub, err := inferValue(el.Value)
+			if err != nil {
+				return nil, err
+			}
+			items, err = mergeSchema(items, sub)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &Schema{Type: "array", Items: items}, nil
+	default:
+		return nil, fmt.Errorf("unsupported value type %T", v)
+	}
+}
+
+// mergeSchema combines schemas inferred from sibling array elements. Integer
+// promotes to number when a float is present; otherwise mixed types are an
+// error. Object properties merge property-by-property.
+func mergeSchema(a, b *Schema) (*Schema, error) {
+	if a == nil {
+		return b, nil
+	}
+	if a.Type != b.Type {
+		if (a.Type == "number" && b.Type == "integer") || (a.Type == "integer" && b.Type == "number") {
+			return &Schema{Type: "number"}, nil
+		}
+		return nil, fmt.Errorf("mixed array element types %q and %q", a.Type, b.Type)
+	}
+	switch a.Type {
+	case "object":
+		merged := &Schema{Type: "object", Properties: map[string]*Schema{}}
+		for k, v := range a.Properties {
+			merged.Properties[k] = v
+		}
+		for k, v := range b.Properties {
+			if prev, ok := merged.Properties[k]; ok {
+				m, err := mergeSchema(prev, v)
+				if err != nil {
+					return nil, fmt.Errorf("property %q: %w", k, err)
+				}
+				m.Comment = prev.Comment
+				merged.Properties[k] = m
+			} else {
+				merged.Properties[k] = v
+			}
+		}
+		return merged, nil
+	case "array":
+		items, err := mergeSchema(a.Items, b.Items)
+		if err != nil {
+			return nil, err
+		}
+		return &Schema{Type: "array", Items: items}, nil
+	default:
+		return a, nil
+	}
+}
+
+// trailingComment extracts a same-line trailing comment from the extras
+// surrounding a member value: after (before the comma) then next (after the
+// comma). Text past the first newline belongs to the next line and is
+// ignored. Supports // and single-line /* */ comments.
+func trailingComment(after, next hujson.Extra) string {
+	for _, extra := range []hujson.Extra{after, next} {
+		line := string(extra)
+		if i := strings.IndexByte(line, '\n'); i >= 0 {
+			line = line[:i]
+		}
+		if i := strings.Index(line, "//"); i >= 0 {
+			return strings.TrimSpace(line[i+2:])
+		}
+		if i := strings.Index(line, "/*"); i >= 0 {
+			if j := strings.Index(line[i+2:], "*/"); j >= 0 {
+				return strings.TrimSpace(line[i+2 : i+2+j])
+			}
+		}
+	}
+	return ""
 }
 
 // deriveName turns a filename into a PascalCase island name:
 // "profile.island.html" -> "Profile", "user_card.island.html" -> "UserCard",
-// "user-card.island.html" -> "UserCard". The result is suitable for Go
-// exported identifiers (RenderUserCard, UserCardData).
+// "user-card.island.html" -> "UserCard".
 func deriveName(path string) string {
 	base := path
 	if i := strings.LastIndexAny(base, "/\\"); i >= 0 {
 		base = base[i+1:]
 	}
-	// strip the .island.html suffix
-	if strings.HasSuffix(base, ".island.html") {
-		base = strings.TrimSuffix(base, ".island.html")
-	} else if strings.HasSuffix(base, ".html") {
-		base = strings.TrimSuffix(base, ".html")
-	}
-	// take the first dot-separated segment as the name
 	if i := strings.IndexByte(base, '.'); i >= 0 {
 		base = base[:i]
 	}
@@ -279,9 +384,6 @@ func deriveName(path string) string {
 }
 
 // toPascalCase converts a snake_case or kebab-case identifier to PascalCase.
-// Each segment separated by '_' or '-' has its first rune uppercased; the
-// rest of the segment is preserved. Already-PascalCase input is unchanged,
-// so "UserCard" stays "UserCard" and "profile" becomes "Profile".
 func toPascalCase(s string) string {
 	var b strings.Builder
 	startWord := true
@@ -291,7 +393,7 @@ func toPascalCase(s string) string {
 			continue
 		}
 		if startWord {
-			b.WriteRune([]rune(strings.ToUpper(string(r)))[0])
+			b.WriteRune(unicode.ToUpper(r))
 			startWord = false
 		} else {
 			b.WriteRune(r)

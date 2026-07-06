@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "url": "https://cdn.jsdelivr.net/npm/open-props@1.7.0/open-props.min.css",
+      "file": "860f1c4a7d44015e949f65aee04ac2b8fce63cf0fa898209609f23297dc03989.css",
+      "kind": "css",
+      "downloaded_at": "2026-07-06T00:21:30.24873+02:00"
+    },
+    {
+      "url": "https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js",
+      "file": "c213894838ada545785d06464ddfbf2cb1612b4594bad8a1d4ac71e1a2feda6a.js",
+      "kind": "js",
+      "downloaded_at": "2026-07-06T00:21:30.258886+02:00"
+    }
+  ]
+}

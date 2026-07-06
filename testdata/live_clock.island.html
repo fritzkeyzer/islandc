@@ -11,7 +11,11 @@
 				align-items: center;
 				gap: 8px;
 				padding: 24px 32px;
-				background: radial-gradient(circle at 30% 20%, #1e293b, #020617);
+				background: radial-gradient(
+					circle at 30% 20%,
+					#1e293b,
+					#020617
+				);
 				color: #e2e8f0;
 				border-radius: 18px;
 				font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
@@ -56,7 +60,7 @@
 		</style>
 	</head>
 	<body>
-		<!-- 1. Root mount — placeholder DOM, replaced at runtime. -->
+		<!-- Root mount — placeholder DOM, replaced at runtime. -->
 		<div id="island-root">
 			<div class="island-clock">
 				<div class="time">--:--:--</div>
@@ -64,39 +68,27 @@
 			</div>
 		</div>
 
-		<!-- 2. Schema → becomes Go struct. -->
-		<script type="application/schema+json" id="island-schema">
+		<!-- Data island — inert JSON. islandc replaces the body with
+		     json.Marshal(d) at serve time. -->
+		<script id="island-data" type="application/json">
 			{
-				"type": "object",
-				"properties": {
-					"timezone": { "type": "string", "tag": "timezone" },
-					"hour24": { "type": "boolean", "tag": "hour24" },
-					"tickHz": { "type": "number", "tag": "tickHz" }
-				}
+				"timezone": "UTC", // IANA tz name, or "local"
+				"hour24": true, // 24-hour format when true
+				"tickHz": 1, // refresh frequency in Hz
 			}
 		</script>
 
-		<!-- 3. Data island — placeholder JSON in source. -->
-		<script type="application/json" id="island-data">
-			{
-				"timezone": "UTC",
-				"hour24": true,
-				"tickHz": 1
-			}
-		</script>
-
-		<!-- 4. Render script — pure client, rewrites #island-root. -->
+		<!-- Render script — pure client, rewrites #island-root. -->
 		<script type="module" data-island-render>
-			const data = JSON.parse(
-				document.getElementById("island-data").textContent,
-			);
+			const data = JSON.parse(document.getElementById("island-data").textContent);
 			const root = document.getElementById("island-root");
 
 			let state = { ...data };
 
 			function fmt(now) {
 				const opts = {
-					timeZone: state.timezone === "local" ? undefined : state.timezone,
+					timeZone:
+						state.timezone === "local" ? undefined : state.timezone,
 					hour: state.hour24 ? "2-digit" : "2-digit",
 					hour12: !state.hour24,
 					minute: "2-digit",

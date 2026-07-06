@@ -1,10 +1,8 @@
 // Package docs embeds the project documentation so the islandc binary can
-// serve it via flags (--help, --docs, --version, --changelog) without
-// relying on the filesystem.
-//
-// The embedded copies live alongside this package (README.md,
-// ISLAND_FLAVOURED_HTML.md, version.json, CHANGELOG.md). Keep them in sync
-// with the canonical files at the repository root.
+// serve it via flags (--help, --docs, --version) without relying on the
+// filesystem. The embedded copies live alongside this package (README.md,
+// ISLAND_FLAVOURED_HTML.md, version.json) and are kept in sync with the
+// canonical files at the repository root by the `just gen` recipe.
 package docs
 
 import (
@@ -22,12 +20,9 @@ var IslandFlavouredHTML []byte
 //go:embed version.json
 var Version []byte
 
-//go:embed CHANGELOG.md
-var Changelog []byte
-
-// Print writes the given bytes to out wrapped in the given XML tag.
+// Print writes b to out wrapped in the given XML tag.
 func Print(out io.Writer, tag string, b []byte) {
 	fmt.Fprintf(out, "<%s>\n", tag)
-	fmt.Fprint(out, string(b))
+	out.Write(b)
 	fmt.Fprintf(out, "</%s>\n", tag)
 }

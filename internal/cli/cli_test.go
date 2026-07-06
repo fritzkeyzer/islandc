@@ -153,9 +153,8 @@ func TestRun_recursive(t *testing.T) {
 	}
 }
 
-// TestRun_infoFlags verifies the info flags (--help, --docs, --version,
-// --changelog) each print the corresponding embedded doc wrapped in the
-// expected XML tag.
+// TestRun_infoFlags verifies the info flags (--help, --docs, --version)
+// each print the corresponding embedded doc wrapped in the expected XML tag.
 func TestRun_infoFlags(t *testing.T) {
 	cases := []struct {
 		flag string
@@ -164,7 +163,6 @@ func TestRun_infoFlags(t *testing.T) {
 		{"--help", "<readme>"},
 		{"--docs", "<island-flavoured-html>"},
 		{"--version", "<version>"},
-		{"--changelog", "<changelog>"},
 	}
 	for _, c := range cases {
 		var out, errw bytes.Buffer

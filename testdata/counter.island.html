@@ -8,7 +8,7 @@
 			.island-counter {
 				display: inline-flex;
 				align-items: center;
-				g</title>ap: 12px;
+				gap: 12px;
 				padding: 16px 20px;
 				background: linear-gradient(135deg, #1e293b, #0f172a);
 				color: #e2e8f0;
@@ -27,7 +27,9 @@
 				cursor: pointer;
 				background: #334155;
 				color: #f8fafc;
-				transition: transform 0.08s ease, background 0.15s ease;
+				transition:
+					transform 0.08s ease,
+					background 0.15s ease;
 			}
 			.island-counter button:hover {
 				background: #475569;
@@ -62,7 +64,7 @@
 		</style>
 	</head>
 	<body>
-		<!-- 1. Root mount — placeholder DOM, replaced at runtime. -->
+		<!-- Root mount — placeholder DOM, replaced at runtime. -->
 		<div id="island-root">
 			<div class="island-counter">
 				<button data-act="dec">−</button>
@@ -75,36 +77,21 @@
 			</div>
 		</div>
 
-		<!-- 2. Schema → becomes Go struct. -->
-		<script type="application/schema+json" id="island-schema">
+		<!-- Data island — inert JSON. islandc replaces the body with
+		     json.Marshal(d) at serve time. -->
+		<script id="island-data" type="application/json">
 			{
-				"type": "object",
-				"properties": {
-					"count": { "type": "integer", "tag": "count" },
-					"label": { "type": "string", "tag": "label" },
-					"step": { "type": "integer", "tag": "step" },
-					"min": { "type": "integer", "tag": "min" },
-					"max": { "type": "integer", "tag": "max" }
-				}
-			}
-		</script>
-
-		<!-- 3. Data island — placeholder JSON in source. -->
-		<script type="application/json" id="island-data">
-			{
-				"count": 0,
+				"count": 0, // current click count
 				"label": "clicks",
-				"step": 1,
+				"step": 1, // amount added/removed per click
 				"min": -99,
 				"max": 99
 			}
 		</script>
 
-		<!-- 4. Render script — pure client, rewrites #island-root. -->
+		<!-- Render script — pure client, rewrites #island-root. -->
 		<script type="module" data-island-render>
-			const data = JSON.parse(
-				document.getElementById("island-data").textContent,
-			);
+			const data = JSON.parse(document.getElementById("island-data").textContent);
 			const root = document.getElementById("island-root");
 
 			let state = { ...data };
@@ -128,8 +115,10 @@
 			root.addEventListener("click", (e) => {
 				const act = e.target?.dataset?.act;
 				if (!act) return;
-				if (act === "inc") state.count = clamp(state.count + state.step);
-				if (act === "dec") state.count = clamp(state.count - state.step);
+				if (act === "inc")
+					state.count = clamp(state.count + state.step);
+				if (act === "dec")
+					state.count = clamp(state.count - state.step);
 				if (act === "reset") state.count = clamp(0);
 				render();
 			});

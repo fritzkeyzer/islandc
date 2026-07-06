@@ -1,4 +1,4 @@
 {
-	"version": "v0.0.3",
-	"label": "go:embed source HTML"
+	"version": "v0.1.0",
+	"label": "Inert JSON data islands + CDN dep baking"
 }

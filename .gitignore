@@ -2,11 +2,16 @@
 # Finder metadata
 .DS_Store
 
+### Editor / agent workspace
+.junie/
+
+
 # Thumbnails
 ._*
 
 # Custom folder icons
-Icon
+Icon
+
 
 # Volume root files
 .DocumentRevisions-V100
@@ -93,3 +98,4 @@ go.work.sum
 
 # env file
 .env
+/.boxy/snapshot.json

@@ -12,10 +12,6 @@ import (
 	"github.com/fritzkeyzer/islandc/internal/island"
 )
 
-// execCmd is wrapped so tests could swap it, but mainly to keep the
-// import name distinct from the local exec() helper.
-var execCmd = osexec.Command
-
 func TestGenerate_profileFixture(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "profile.island.html"))
 	if err != nil {
@@ -57,7 +53,7 @@ func TestGenerate_profileFixture(t *testing.T) {
 		"func RenderProfile(w io.Writer, d ProfileData) error {",
 		"json.Marshal(d)",
 		"injectIsland(w, profileHTML, blob,",
-		"func injectIsland(w io.Writer, html, blob []byte, openEnd, closeStart int) error {",
+		"func injectIsland(w io.Writer, html []byte, blob []byte, open, close int) error {",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("generated output missing %q\n---\n%s", want, out)
@@ -65,8 +61,8 @@ func TestGenerate_profileFixture(t *testing.T) {
 	}
 }
 
-// TestGenerate_compilesAndRuns verifies the generated code actually compiles
-// and that RenderProfile splices the marshaled blob into the island-data slot.
+// TestGenerate_compilesAndRuns verifies the generated code compiles and that
+// RenderProfile splices the marshaled blob into the island-data slot.
 func TestGenerate_compilesAndRuns(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "profile.island.html"))
 	if err != nil {
@@ -81,9 +77,10 @@ func TestGenerate_compilesAndRuns(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	// Write the generated file into a temp module and run `go build` +
-	// a tiny driver that calls RenderProfile. This is the real end-to-end
-	// check: the generated file must be self-contained and compile.
+	// Write the generated file into a temp module, embed the source
+	// .island.html alongside, and run `go build` + a tiny driver. This is
+	// the real end-to-end check: the generated file must self-contain and
+	// compile.
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module gentest\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
@@ -95,8 +92,6 @@ func TestGenerate_compilesAndRuns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(viewsDir, "views.go"), out, 0o644); err != nil {
 		t.Fatalf("write views.go: %v", err)
 	}
-	// The generated file embeds the source .island.html via //go:embed,
-	// so the source file must be present alongside views.go at build time.
 	if err := os.WriteFile(filepath.Join(viewsDir, f.Path), f.HTML, 0o644); err != nil {
 		t.Fatalf("write %s: %v", f.Path, err)
 	}
@@ -148,6 +143,11 @@ func main() {
 		fmt.Println("real data missing from island-data slot")
 		return
 	}
+	// The slot must be pure JSON, not a JS assignment.
+	if strings.Contains(slot, "window.") {
+		fmt.Println("slot contains JS assignment, expected pure JSON")
+		return
+	}
 	fmt.Println("OK")
 }
 `
@@ -155,7 +155,6 @@ func main() {
 		t.Fatalf("write main.go: %v", err)
 	}
 
-	// go mod tidy is unnecessary (stdlib only); just build & run.
 	build := exec(t, dir, "go", "build", "./...")
 	if build != "" {
 		t.Fatalf("go build failed:\n%s", build)
@@ -167,12 +166,9 @@ func main() {
 }
 
 func TestGenerate_multipleFilesStableOrder(t *testing.T) {
-	mk := func(name, schema string) *island.File {
+	mk := func(name string) *island.File {
 		src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">` + schema + `</script>
-<script type="application/json" id="island-data">{"a":"hi"}</script>
-<script type="module" data-island-render></script>
+<script id="island-data" type="application/json">{"a":"hi"}</script>
 </body></html>`)
 		f, err := island.Parse(name, src)
 		if err != nil {
@@ -180,8 +176,8 @@ func TestGenerate_multipleFilesStableOrder(t *testing.T) {
 		}
 		return f
 	}
-	zeta := mk("zeta.island.html", `{"type":"object","properties":{"a":{"type":"string"}}}`)
-	alpha := mk("alpha.island.html", `{"type":"object","properties":{"a":{"type":"string"}}}`)
+	zeta := mk("zeta.island.html")
+	alpha := mk("alpha.island.html")
 
 	out1, err := Generate(Config{PackageName: "views", Files: []*island.File{zeta, alpha}})
 	if err != nil {
@@ -203,15 +199,11 @@ func TestGenerate_multipleFilesStableOrder(t *testing.T) {
 }
 
 // mkIsland builds a minimal valid island HTML source from a name and a
-// JSON schema string, with a shape-compatible placeholder. It is a helper
-// for tests that want to exercise the generator without a fixture file.
-func mkIsland(t *testing.T, name, schema, placeholder string) *island.File {
+// placeholder literal.
+func mkIsland(t *testing.T, name, placeholder string) *island.File {
 	t.Helper()
 	src := []byte(`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
-<script type="application/schema+json" id="island-schema">` + schema + `</script>
-<script type="application/json" id="island-data">` + placeholder + `</script>
-<script type="module" data-island-render></script>
+<script id="island-data" type="application/json">` + placeholder + `</script>
 </body></html>`)
 	f, err := island.Parse(name, src)
 	if err != nil {
@@ -221,10 +213,8 @@ func mkIsland(t *testing.T, name, schema, placeholder string) *island.File {
 }
 
 // writeTempModule writes a self-contained generated views package plus a
-// driver into a temp dir and returns the dir path. The driver source must
-// import "gentest/views". The source .island.html files are written
-// alongside the generated views.go so //go:embed can find them at build
-// time.
+// driver into a temp dir and returns the dir path. The source .island.html
+// files are written alongside the generated views.go for //go:embed.
 func writeTempModule(t *testing.T, files []*island.File, generated []byte, driver string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -252,9 +242,7 @@ func writeTempModule(t *testing.T, files []*island.File, generated []byte, drive
 // TestGenerate_counter exercises integer + boolean scalar fields and
 // verifies the generated Render<Name> splices live data into the slot.
 func TestGenerate_counter(t *testing.T) {
-	schema := `{"type":"object","properties":{"count":{"type":"integer"},"label":{"type":"string"},"active":{"type":"boolean"}}}`
-	placeholder := `{"count":0,"label":"clicks","active":true}`
-	f := mkIsland(t, "counter.island.html", schema, placeholder)
+	f := mkIsland(t, "counter.island.html", `{"count":0,"label":"clicks","active":true}`)
 
 	out, err := Generate(Config{PackageName: "views", Files: []*island.File{f}})
 	if err != nil {
@@ -291,7 +279,7 @@ func main() {
 	err := views.RenderCounter(&buf, views.CounterData{Count: 42, Label: "clicks", Active: true})
 	if err != nil { fmt.Println("ERR", err); return }
 	out := buf.String()
-	if !strings.Contains(out, "island-root") { fmt.Println("MISSING island-root"); return }
+	if !strings.Contains(out, "island-data") { fmt.Println("MISSING island-data"); return }
 	openIdx := strings.Index(out, "island-data")
 	gt := strings.Index(out[openIdx:], ">")
 	slotStart := openIdx + gt + 1
@@ -312,12 +300,9 @@ func main() {
 }
 
 // TestGenerate_todoList exercises an array of nested objects (each item is
-// an object with string + boolean fields) and checks the generated nested
-// struct name and field types.
+// an object with string + boolean fields).
 func TestGenerate_todoList(t *testing.T) {
-	schema := `{"type":"object","properties":{"title":{"type":"string"},"items":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"done":{"type":"boolean"}}}}}}`
-	placeholder := `{"title":"Today","items":[{"text":"write tests","done":false}]}`
-	f := mkIsland(t, "todo_list.island.html", schema, placeholder)
+	f := mkIsland(t, "todo_list.island.html", `{"title":"Today","items":[{"text":"write tests","done":false}]}`)
 
 	out, err := Generate(Config{PackageName: "views", Files: []*island.File{f}})
 	if err != nil {
@@ -362,7 +347,7 @@ func main() {
 	})
 	if err != nil { fmt.Println("ERR", err); return }
 	out := buf.String()
-	if !strings.Contains(out, "island-root") { fmt.Println("MISSING island-root"); return }
+	if !strings.Contains(out, "island-data") { fmt.Println("MISSING island-data"); return }
 	openIdx := strings.Index(out, "island-data")
 	gt := strings.Index(out[openIdx:], ">")
 	slotStart := openIdx + gt + 1
@@ -384,14 +369,10 @@ func main() {
 	}
 }
 
-// TestGenerate_chatWidget combines a nested object (the user) with an array
-// of nested objects (messages), exercising both object and array nesting in
-// one schema. It verifies the generated nested struct names and that the
-// rendered output contains the live data.
+// TestGenerate_chatWidget combines a nested object with an array of nested
+// objects, exercising both object and array nesting in one schema.
 func TestGenerate_chatWidget(t *testing.T) {
-	schema := `{"type":"object","properties":{"user":{"type":"object","properties":{"name":{"type":"string"},"online":{"type":"boolean"}}},"messages":{"type":"array","items":{"type":"object","properties":{"author":{"type":"string"},"body":{"type":"string"},"ts":{"type":"number"}}}}}}`
-	placeholder := `{"user":{"name":"Mara","online":true},"messages":[{"author":"Mara","body":"hi","ts":1.5}]}`
-	f := mkIsland(t, "chat-widget.island.html", schema, placeholder)
+	f := mkIsland(t, "chat-widget.island.html", `{"user":{"name":"Mara","online":true},"messages":[{"author":"Mara","body":"hi","ts":1.5}]}`)
 
 	out, err := Generate(Config{PackageName: "views", Files: []*island.File{f}})
 	if err != nil {
@@ -439,7 +420,7 @@ func main() {
 	})
 	if err != nil { fmt.Println("ERR", err); return }
 	out := buf.String()
-	if !strings.Contains(out, "island-root") { fmt.Println("MISSING island-root"); return }
+	if !strings.Contains(out, "island-data") { fmt.Println("MISSING island-data"); return }
 	openIdx := strings.Index(out, "island-data")
 	gt := strings.Index(out[openIdx:], ">")
 	slotStart := openIdx + gt + 1
@@ -461,18 +442,11 @@ func main() {
 
 // TestGenerate_multipleInteractiveIslands verifies that several islands in
 // one directory produce stable, non-colliding identifiers and that the
-// combined file compiles. It also checks the snake/kebab -> PascalCase
-// normalization across multiple files at once.
+// combined file compiles.
 func TestGenerate_multipleInteractiveIslands(t *testing.T) {
-	counter := mkIsland(t, "counter.island.html",
-		`{"type":"object","properties":{"count":{"type":"integer"}}}`,
-		`{"count":0}`)
-	todo := mkIsland(t, "todo_list.island.html",
-		`{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"}}}}}}`,
-		`{"items":[{"text":"a"}]}`)
-	chat := mkIsland(t, "chat-widget.island.html",
-		`{"type":"object","properties":{"user":{"type":"object","properties":{"name":{"type":"string"}}}}}`,
-		`{"user":{"name":"x"}}`)
+	counter := mkIsland(t, "counter.island.html", `{"count":0}`)
+	todo := mkIsland(t, "todo_list.island.html", `{"items":[{"text":"a"}]}`)
+	chat := mkIsland(t, "chat-widget.island.html", `{"user":{"name":"x"}}`)
 
 	out, err := Generate(Config{PackageName: "views", Files: []*island.File{counter, todo, chat}})
 	if err != nil {
@@ -554,9 +528,7 @@ func TestGenerate_nameNormalization(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.filename, func(t *testing.T) {
-			f := mkIsland(t, c.filename,
-				`{"type":"object","properties":{"a":{"type":"string"}}}`,
-				`{"a":"hi"}`)
+			f := mkIsland(t, c.filename, `{"a":"hi"}`)
 			if f.Name != c.wantName {
 				t.Errorf("Name = %q, want %q", f.Name, c.wantName)
 			}
@@ -567,12 +539,133 @@ func TestGenerate_nameNormalization(t *testing.T) {
 	}
 }
 
-// exec runs a command in dir and returns combined output as a string.
-// It fails the test only on a non-build/run error (the caller interprets
-// the output text to decide pass/fail).
+// TestBake_inlinesResolvedCDNDeps bakes an island with CDN deps (some
+// resolved, some not), compiles and runs the generated code against the
+// baked HTML, and verifies inlining, dedup, verbatim fallback, and that the
+// data island still splices real data after offsets shifted.
+func TestBake_inlinesResolvedCDNDeps(t *testing.T) {
+	cssURL := "https://cdn.example.com/shared.css"
+	jsURL := "https://cdn.example.com/util.js"
+	unresolvedURL := "https://cdn.example.com/missing.js"
+	vendored := map[string][]byte{
+		"shared.css": []byte(".shared{color:#0f0}\n"),
+		"util.js":    []byte("window.util=function(){return 42;};\n"),
+	}
+
+	// The island imports the shared CSS twice (dedup), the JS once, and an
+	// unresolved JS once (ships verbatim).
+	aHTML := []byte(`<!DOCTYPE html><html><body>
+<link rel="stylesheet" href="` + cssURL + `" />
+<link rel="stylesheet" href="` + cssURL + `" />
+<script src="` + jsURL + `" defer></script>
+<script src="` + unresolvedURL + `"></script>
+<script id="island-data" type="application/json">{"a":"hi"}</script>
+</body></html>`)
+	a, err := island.Parse("alpha.island.html", aHTML)
+	if err != nil {
+		t.Fatalf("Parse alpha: %v", err)
+	}
+
+	resolved := map[string]string{cssURL: "shared.css", jsURL: "util.js"}
+	baked, warnings, err := Bake(a, resolved, func(name string) ([]byte, error) {
+		return vendored[name], nil
+	})
+	if err != nil {
+		t.Fatalf("Bake: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if baked == nil {
+		t.Fatal("Bake returned nil for island with resolved deps")
+	}
+
+	out, err := Generate(Config{
+		PackageName: "views",
+		Files:       []*island.File{a},
+		Baked:       map[string]*Baked{a.Path: baked},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if !strings.Contains(string(out), "//go:embed alpha.island.gen.html") {
+		t.Errorf("generated output must embed the baked file:\n%s", out)
+	}
+
+	// Build and run a driver that renders the island and checks the output.
+	dir := writeTempModule(t, nil, out, `package main
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"gentest/views"
+)
+
+func main() {
+	var buf bytes.Buffer
+	if err := views.RenderAlpha(&buf, views.AlphaData{A: "x"}); err != nil { fmt.Println("ERR alpha", err); return }
+	aOut := buf.String()
+	if strings.Count(aOut, ".shared{color:#0f0}") != 1 { fmt.Println("CSS not deduped: count=", strings.Count(aOut, ".shared{color:#0f0}")); return }
+	if strings.Count(aOut, "window.util=function(){return 42;};") != 1 { fmt.Println("JS not inlined once"); return }
+	if strings.Contains(aOut, `+"`"+`href="`+cssURL+`"`+"`"+`) { fmt.Println("still has resolved CSS href"); return }
+	if strings.Contains(aOut, `+"`"+`src="`+jsURL+`"`+"`"+`) { fmt.Println("still has resolved JS src"); return }
+	if !strings.Contains(aOut, `+"`"+`src="`+unresolvedURL+`"`+"`"+`) { fmt.Println("unresolved CDN tag missing"); return }
+	if !strings.Contains(aOut, "<script defer>") { fmt.Println("missing <script defer>"); return }
+	if !strings.Contains(aOut, `+"`"+`{"a":"x"}`+"`"+`) { fmt.Println("data not spliced:", aOut); return }
+	fmt.Println("OK")
+}
+`)
+	// The generated file embeds the baked sibling, not the source.
+	if err := os.WriteFile(filepath.Join(dir, "views", "alpha.island.gen.html"), baked.HTML, 0o644); err != nil {
+		t.Fatalf("write baked html: %v", err)
+	}
+	if build := exec(t, dir, "go", "build", "./..."); build != "" {
+		t.Fatalf("go build failed:\n%s", build)
+	}
+	if got := exec(t, dir, "go", "run", "."); got != "OK\n" {
+		t.Fatalf("go run output = %q, want %q", got, "OK\n")
+	}
+}
+
+// TestBake_scriptEndTagInDepFallsBackVerbatim verifies that JS dep content
+// containing "</script>" is never inlined: the CDN tag ships verbatim.
+func TestBake_scriptEndTagInDepFallsBackVerbatim(t *testing.T) {
+	jsURL := "https://cdn.example.com/evil.js"
+	src := []byte(`<!DOCTYPE html><html><body>
+<script src="` + jsURL + `"></script>
+<script id="island-data" type="application/json">{"a":"hi"}</script>
+</body></html>`)
+	f, err := island.Parse("x.island.html", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	baked, warnings, err := Bake(f, map[string]string{jsURL: "evil.js"}, func(string) ([]byte, error) {
+		return []byte("document.write('</script>');"), nil
+	})
+	if err != nil {
+		t.Fatalf("Bake: %v", err)
+	}
+	if baked != nil {
+		t.Errorf("expected no baked output (nothing inlined), got %q", baked.HTML)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "cannot be inlined") {
+		t.Errorf("warnings = %v, want one </script> warning", warnings)
+	}
+}
+
+// TestBake_noResolvedDeps returns nil so the source file is embedded as-is.
+func TestBake_noResolvedDeps(t *testing.T) {
+	f := mkIsland(t, "x.island.html", `{"a":"hi"}`)
+	baked, warnings, err := Bake(f, nil, func(string) ([]byte, error) { return nil, nil })
+	if err != nil || baked != nil || len(warnings) != 0 {
+		t.Errorf("got (%v, %v, %v), want (nil, none, nil)", baked, warnings, err)
+	}
+}
+
 func exec(t *testing.T, dir string, name string, args ...string) string {
 	t.Helper()
-	cmd := execCmd(name, args...)
+	cmd := osexec.Command(name, args...)
 	cmd.Dir = dir
 	var buf bytes.Buffer
 	cmd.Stdout = &buf

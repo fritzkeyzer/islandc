@@ -1,27 +1,58 @@
 # Island Flavoured HTML
 
-A `.island.html` file is plain HTML with four conventions. `islandc` parses them by byte scan (no DOM parse) and emits typed Go code.
-
-## Anatomy
+A `.island.html` file is HTML with **one convention**: a data island. Everything else is plain HTML — islandc doesn't care about it.
 
 ```
-profile.island.html
-├── 1. Root mount          <div id="island-root"> ... </div>      placeholder DOM, replaced by the render script at runtime
-├── 2. Schema block       <script type="application/schema+json" id="island-schema">  JSON Schema → Go struct
-├── 3. Data island        <script type="application/json" id="island-data">          placeholder JSON, overwritten at serve time
-└── 4. Render script      <script type="module" data-island-render>                 client JS, reads #island-data, rewrites #island-root
+<script id="island-data" type="application/json"> { ... } </script>
 ```
 
-The island name is inferred from the filename and normalized to PascalCase: `profile.island.html` → `Profile`, `user_card.island.html` → `UserCard`, generating `ProfileData`/`RenderProfile` and `UserCardData`/`RenderUserCard` respectively.
+The island name comes from the filename, PascalCased: `profile.island.html` → `Profile`, `user_card.island.html` → `UserCard`.
 
-## Conventions
+## Data island
 
-- **Root mount** — any element with `id="island-root"`. Holds styled sample output. The render script replaces its `innerHTML` at runtime.
-- **Schema block** — `type="application/schema+json"`, `id="island-schema"`. Root must be `type: "object"` with at least one property. Supported types: `string`, `number`, `integer`, `boolean`, `array` (with `items`), `object` (with `properties`). Nested objects become named Go structs. Optional `"tag"` overrides the JSON tag.
-- **Data island** — `type="application/json"`, `id="island-data"`. Holds placeholder JSON in source. Must be valid JSON and shape-compatible with the schema (best-effort check). At serve time, `islandc`'s generated `Render<Name>` splices `json.Marshal(data)` into this slot, replacing the placeholder.
-- **Render script** — `type="module"`, `data-island-render`. Pure client code. Typically reads `#island-data`, builds DOM, and writes it into `#island-root`. `islandc` does not parse or execute it; it only requires its presence.
+`<script id="island-data" type="application/json">` with a JWCC object body (JSON with comments and trailing commas). This is the standard [inert JSON data block](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script#embedding_data_in_html) — browsers don't execute it.
 
-## Complete example
+```html
+<script id="island-data" type="application/json">
+  {
+    "count": 0, // current click count
+    "step": 1,  // amount added/removed per click
+  }
+</script>
+```
+
+**islandc owns this body.** `Render<Name>` replaces it with `json.Marshal(data)` at serve time. The `type="application/json"` attribute is required.
+
+The client reads the data with:
+
+```js
+const data = JSON.parse(document.getElementById("island-data").textContent);
+```
+
+### JWCC
+
+- `//` and `/* */` comments are legal in the source. Trailing comments on properties become Go doc comments. (Rendered output is pure JSON.)
+- Trailing commas are legal.
+- Types are inferred from the placeholder: integers → `int`, floats → `float64`, etc. Across array elements, `int` promotes to `float64` if a float is present; otherwise mixed types are an error.
+
+### The rest is userspace
+
+islandc ignores everything else in the file — the root mount, client scripts, styles, whatever you put in there. A common pattern is an element with `id="island-root"` as a mount point for a client script, but that's your business, not a convention.
+
+## CDN lib imports
+
+`<link rel="stylesheet" href="https://...">` and `<script src="https://...">` with http(s) URLs are CDN deps. They ship verbatim by default.
+
+`--resolve-deps` downloads each unique URL into `<target>/islandc.deps/` (dumb cache, indexed by `islandc.manifest.json`) and bakes a fully-inlined `<name>.island.gen.html` sibling per island, embedded instead of the source:
+
+- `<link rel="stylesheet" href="https://...">` → `<style>...</style>`
+- `<script src="https://..." defer></script>` → `<script defer>...</script>` (other attrs preserved, `src` dropped)
+
+Duplicates within a file are inlined once. Unresolved URLs (download failures, non-200) and JS containing `</script>` fall back to the verbatim CDN tag with a warning. Commit the cache and baked files for hermetic builds.
+
+Non-CDN refs (relative, `/abs`, `//protocol-relative`, `data:`) are always left untouched.
+
+## Example (vanilla JS)
 
 ```html
 <!doctype html>
@@ -30,7 +61,6 @@ The island name is inferred from the filename and normalized to PascalCase: `pro
     <meta charset="UTF-8" />
     <title>Profile</title>
     <style>
-      /* Styles live in the source file and ship verbatim. */
       .who { display: flex; gap: 12px; align-items: center; }
       .name { font-weight: 600; }
       .role { color: #888; }
@@ -40,10 +70,6 @@ The island name is inferred from the filename and normalized to PascalCase: `pro
     </style>
   </head>
   <body>
-
-    <!-- 1. Root mount — placeholder DOM.
-         Real, styled sample output. The render script replaces this at runtime.
-         Must be present; id must be "island-root". -->
     <div id="island-root">
       <div class="who">
         <img src="https://i.pravatar.cc/120?img=47" alt="" />
@@ -52,55 +78,10 @@ The island name is inferred from the filename and normalized to PascalCase: `pro
           <div class="role">Staff Engineer · Platform</div>
         </div>
       </div>
-      <div class="stats">
-        <div class="stat">
-          <div class="v">142</div>
-          <div class="l">commits / week</div>
-        </div>
-        <div class="stat">
-          <div class="v">38</div>
-          <div class="l">reviews / week</div>
-        </div>
-        <div class="stat">
-          <div class="v">11.4</div>
-          <div class="l">p50 latency</div>
-        </div>
-      </div>
     </div>
 
-    <!-- 2. Schema block — becomes a Go struct.
-         type="application/schema+json"  id="island-schema"
-         Root type must be "object" with at least one property.
-         Supported: string, number, integer, boolean, array (items), object (properties).
-         Nested objects become named structs (e.g. ProfileDataStats).
-         Optional "tag" overrides the json tag. -->
-    <script type="application/schema+json" id="island-schema">
-      {
-        "type": "object",
-        "properties": {
-          "name":   { "type": "string", "tag": "name" },
-          "role":   { "type": "string", "tag": "role" },
-          "avatar": { "type": "string", "tag": "avatar" },
-          "stats": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "label": { "type": "string" },
-                "value": { "type": "number" }
-              }
-            }
-          }
-        }
-      }
-    </script>
-
-    <!-- 3. Data island — placeholder JSON in source.
-         type="application/json"  id="island-data"
-         Must be valid JSON and shape-compatible with the schema above.
-         At serve time the generated RenderProfile overwrites this slot
-         with json.Marshal(data), so the placeholder never leaks. -->
-    <script type="application/json" id="island-data">
+    <!-- Data island — islandc replaces this body with json.Marshal(data) -->
+    <script id="island-data" type="application/json">
       {
         "name": "Mara Okafor",
         "role": "Staff Engineer · Platform",
@@ -113,14 +94,9 @@ The island name is inferred from the filename and normalized to PascalCase: `pro
       }
     </script>
 
-    <!-- 4. Render script — pure client, replaces #island-root.
-         type="module"  data-island-render
-         islandc does not parse or run this; it only requires its presence.
-         Reads the (now real) data from #island-data and rebuilds the DOM. -->
-    <script type="module" data-island-render>
-      const data = JSON.parse(
-        document.getElementById("island-data").textContent,
-      );
+    <!-- Client script — reads the data block, rebuilds #island-root -->
+    <script type="module">
+      const data = JSON.parse(document.getElementById("island-data").textContent);
       const root = document.getElementById("island-root");
       root.innerHTML = `
         <div class="who">
@@ -130,22 +106,57 @@ The island name is inferred from the filename and normalized to PascalCase: `pro
             <div class="role">${data.role}</div>
           </div>
         </div>
-        <div class="stats">
-          ${data.stats.map((s) => `
-            <div class="stat">
-              <div class="v">${s.value}</div>
-              <div class="l">${s.label}</div>
-            </div>
-          `).join("")}
-        </div>
       `;
     </script>
-
   </body>
 </html>
 ```
 
-## What `islandc` generates from this
+## Example (Alpine.js)
+
+No render script needed — the root mount binds declaratively.
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Counter</title>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  </head>
+  <body>
+    <div id="island-root">
+      <div class="counter" x-data="counter()">
+        <button @click="dec()">−</button>
+        <span x-text="count"></span>
+        <button @click="inc()">+</button>
+      </div>
+    </div>
+
+    <!-- Data island -->
+    <script id="island-data" type="application/json">
+      {
+        "count": 0, // current click count
+        "step": 1,  // amount added/removed per click
+      }
+    </script>
+
+    <!-- Alpine component factory -->
+    <script>
+      document.addEventListener("alpine:init", () => {
+        const data = JSON.parse(document.getElementById("island-data").textContent);
+        window.Alpine.data("counter", () => ({
+          ...data,
+          inc() { this.count += this.step },
+          dec() { this.count -= this.step },
+        }));
+      });
+    </script>
+  </body>
+</html>
+```
+
+## Generated output
 
 For `profile.island.html`, `islandc` emits into `islandc.gen.go`:
 
@@ -162,7 +173,7 @@ type ProfileDataStats struct {
     Value float64 `json:"value"`
 }
 
-func RenderProfile(w io.Writer, d ProfileData) error { /* splices json.Marshal(d) into the island-data slot */ }
+func RenderProfile(w io.Writer, d ProfileData) error { /* HTML with data island body = json.Marshal(d) */ }
 ```
 
-The generated file imports only the standard library — no runtime dependency on `islandc`.
+Generated code imports only the standard library. `islandc` itself uses `golang.org/x/net/html` and `github.com/tailscale/hujson` at generation time only.
