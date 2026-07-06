@@ -123,7 +123,7 @@
 	</head>
 	<body>
 		<!-- Root mount — placeholder DOM, replaced at runtime. -->
-		<div id="island-root">
+		<div id="todo-root">
 			<div class="island-todo">
 				<header>
 					<h2>Today</h2>
@@ -157,10 +157,10 @@
 			};
 		</script>
 
-		<!-- Render script — pure client, rewrites #island-root. -->
-		<script type="module" data-island-render>
+		<!-- Render script — pure client, rewrites the mount element. -->
+		<script type="module">
 			const data = islandData;
-			const root = document.getElementById("island-root");
+			const root = document.getElementById("todo-root");
 
 			let state = { title: data.title, items: [...data.items] };
 

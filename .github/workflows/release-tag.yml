@@ -7,10 +7,6 @@
 # - Prevents duplicate tagging if the version has not changed.
 # - Generates final release notes via git-cliff.
 # - Creates a Git tag and a corresponding GitHub Release with the compiled notes.
-#
-# Developer Workflow:
-# - Once the "Release Prod..." PR is merged into 'main', this workflow finalizes the release process.
-# - No manual tagging or release creation is required in the GitHub UI.
 
 name: Tag release on main
 

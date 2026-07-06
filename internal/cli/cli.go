@@ -28,25 +28,21 @@ func Run(args []string, out, errw io.Writer) int {
 		fmt.Fprintln(errw, "")
 		fmt.Fprintln(errw, "Usage: islandc [flags] [target-dir]")
 		fmt.Fprintln(errw, "")
+		fmt.Fprintln(errw, "Scans <target-dir> for *.island.html, writes one .go file per dir.")
+		fmt.Fprintln(errw, "")
 		fmt.Fprintln(errw, "Flags:")
 		fs.PrintDefaults()
-		fmt.Fprintln(errw, "")
-		fmt.Fprintln(errw, "Scans <target-dir> for *.island.html, writes one .go file per dir.")
-		fmt.Fprintln(errw, "CDN deps (http(s) <link>/<script src>) ship verbatim by default;")
-		fmt.Fprintln(errw, "--resolve-deps downloads and embeds them, spliced in at render time.")
-		fmt.Fprintln(errw, "Local file deps (./x.js, ./x.css) are always embedded from the package dir.")
-		fmt.Fprintln(errw, "--strict fails the build if any external URL survives into the output.")
 	}
 
 	pkgName := fs.String("pkg", "", "Go package name (default: dir base name)")
 	outName := fs.String("out", "islandc.gen.go", "name of the generated Go file")
 	recursive := fs.Bool("r", false, "recurse into subdirectories; one .go file per dir")
-	resolveDeps := fs.Bool("resolve-deps", false, "download CDN deps into <target>/islandc.deps/, embed them, and splice them in at render time; unresolved deps ship verbatim")
-	strict := fs.Bool("strict", false, "fail the build if any external URL survives into the generated output (hermeticity check)")
+	resolveDeps := fs.Bool("resolve-deps", false, "download CDN deps into <target>/islandc.deps/ and embed them")
+	strict := fs.Bool("strict", false, "fail if any external URL survives into the generated output")
 	quiet := fs.Bool("q", false, "suppress progress output")
-	showHelp := fs.Bool("help", false, "print the README (wrapped in <readme> XML)")
-	showDocs := fs.Bool("docs", false, "print the island-flavoured HTML reference (wrapped in <island-flavoured-html> XML)")
-	showVersion := fs.Bool("version", false, "print the version info (wrapped in <version> XML)")
+	showHelp := fs.Bool("help", false, "print the README")
+	showDocs := fs.Bool("docs", false, "print the island-flavoured HTML reference")
+	showVersion := fs.Bool("version", false, "print version info")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

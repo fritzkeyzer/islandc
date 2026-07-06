@@ -65,7 +65,7 @@
 	</head>
 	<body>
 		<!-- Root mount — placeholder DOM, replaced at runtime. -->
-		<div id="island-root">
+		<div id="counter-root">
 			<div class="island-counter">
 				<button data-act="dec">−</button>
 				<div>
@@ -90,10 +90,10 @@
 			};
 		</script>
 
-		<!-- Render script — pure client, rewrites #island-root. -->
-		<script type="module" data-island-render>
+		<!-- Render script — pure client, rewrites the mount element. -->
+		<script type="module">
 			const data = islandData;
-			const root = document.getElementById("island-root");
+			const root = document.getElementById("counter-root");
 
 			let state = { ...data };
 

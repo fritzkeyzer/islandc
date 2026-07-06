@@ -61,7 +61,7 @@
 	</head>
 	<body>
 		<!-- Root mount — placeholder DOM, replaced at runtime. -->
-		<div id="island-root">
+		<div id="clock-root">
 			<div class="island-clock">
 				<div class="time">--:--:--</div>
 				<div class="date">—</div>
@@ -78,10 +78,10 @@
 			};
 		</script>
 
-		<!-- Render script — pure client, rewrites #island-root. -->
-		<script type="module" data-island-render>
+		<!-- Render script — pure client, rewrites the mount element. -->
+		<script type="module">
 			const data = islandData;
-			const root = document.getElementById("island-root");
+			const root = document.getElementById("clock-root");
 
 			let state = { ...data };
 

@@ -53,13 +53,13 @@ func RenderColorPicker(w io.Writer, d ColorPickerData) error {
 		[]byte("<style>"),
 		dep1,
 		[]byte("</style>"),
-		colorPickerHTML[278:4371],
+		colorPickerHTML[278:4377],
 		blob,
-		colorPickerHTML[4763:5890],
+		colorPickerHTML[4769:5896],
 		[]byte("<script defer>"),
 		dep0,
 		[]byte("</script>"),
-		colorPickerHTML[5988:],
+		colorPickerHTML[5994:],
 	)
 }
 
@@ -84,9 +84,9 @@ func RenderCounter(w io.Writer, d CounterData) error {
 		return err
 	}
 	return writeParts(w,
-		counterHTML[0:2117],
+		counterHTML[0:2118],
 		blob,
-		counterHTML[2264:],
+		counterHTML[2265:],
 	)
 }
 
@@ -110,9 +110,9 @@ func RenderLiveClock(w io.Writer, d LiveClockData) error {
 		return err
 	}
 	return writeParts(w,
-		liveClockHTML[0:1758],
+		liveClockHTML[0:1757],
 		blob,
-		liveClockHTML[1907:],
+		liveClockHTML[1906:],
 	)
 }
 
@@ -139,9 +139,9 @@ func RenderProfile(w io.Writer, d ProfileData) error {
 		return err
 	}
 	return writeParts(w,
-		profileHTML[0:4198],
+		profileHTML[0:4199],
 		blob,
-		profileHTML[4490:],
+		profileHTML[4491:],
 	)
 }
 
@@ -166,9 +166,9 @@ func RenderTodoList(w io.Writer, d TodoListData) error {
 		return err
 	}
 	return writeParts(w,
-		todoListHTML[0:3327],
+		todoListHTML[0:3325],
 		blob,
-		todoListHTML[3509:],
+		todoListHTML[3507:],
 	)
 }
 

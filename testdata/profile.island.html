@@ -141,7 +141,7 @@
 	</head>
 	<body>
 		<!-- Root mount — placeholder DOM. Replaced by the renderer at runtime. -->
-		<div id="island-root">
+		<div id="profile-root">
 			<div class="island-profile">
 				<div class="banner"></div>
 				<div class="avatar-wrap">
@@ -190,10 +190,10 @@
 			};
 		</script>
 
-		<!-- Renderer → pure client, replaces #island-root -->
-		<script type="module" data-island-render>
+		<!-- Renderer → pure client, replaces the mount element -->
+		<script type="module">
 			const data = islandData;
-			const root = document.getElementById("island-root");
+			const root = document.getElementById("profile-root");
 
 			// Format a stat value: integers stay integers, decimals keep one place.
 			const fmt = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1));

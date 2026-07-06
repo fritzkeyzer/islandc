@@ -120,8 +120,8 @@ func main() {
 		fmt.Println("MISSING name in output")
 		return
 	}
-	if !bytes.Contains([]byte(out), []byte("island-root")) {
-		fmt.Println("MISSING island-root")
+	if !bytes.Contains([]byte(out), []byte("profile-root")) {
+		fmt.Println("MISSING profile-root")
 		return
 	}
 	// The island-data slot must now hold the marshaled real data, not the

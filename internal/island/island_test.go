@@ -151,21 +151,21 @@ func TestParse_dataScriptRejectsTypeAttr(t *testing.T) {
 		{
 			"old inert JSON form",
 			`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
+<div id="root"></div>
 <script id="island-data" type="application/json">{"a":"hi"}</script>
 </body></html>`,
 		},
 		{
 			"module type",
 			`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
+<div id="root"></div>
 <script id="island-data" type="module">const islandData = {"a":"hi"};</script>
 </body></html>`,
 		},
 		{
 			"redundant default type",
 			`<!DOCTYPE html><html><body>
-<div id="island-root"></div>
+<div id="root"></div>
 <script id="island-data" type="text/javascript">const islandData = {"a":"hi"};</script>
 </body></html>`,
 		},
@@ -240,7 +240,7 @@ func TestParse_unbalancedBracesIsError(t *testing.T) {
 }
 
 func TestParse_missingData(t *testing.T) {
-	src := []byte(`<!DOCTYPE html><html><body><div id="island-root"></div></body></html>`)
+	src := []byte(`<!DOCTYPE html><html><body><div id="root"></div></body></html>`)
 	if _, err := Parse("x.island.html", src); err == nil {
 		t.Fatal("expected error for missing data island, got nil")
 	}
