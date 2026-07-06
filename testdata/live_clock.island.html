@@ -68,19 +68,19 @@
 			</div>
 		</div>
 
-		<!-- Data island — inert JSON. islandc replaces the body with
-		     json.Marshal(d) at serve time. -->
-		<script id="island-data" type="application/json">
-			{
+		<!-- Data island — executable assignment. The object literal is JWCC;
+		     islandc replaces it with json.Marshal(d) at serve time. -->
+		<script id="island-data">
+			const islandData = {
 				"timezone": "UTC", // IANA tz name, or "local"
 				"hour24": true, // 24-hour format when true
 				"tickHz": 1, // refresh frequency in Hz
-			}
+			};
 		</script>
 
 		<!-- Render script — pure client, rewrites #island-root. -->
 		<script type="module" data-island-render>
-			const data = JSON.parse(document.getElementById("island-data").textContent);
+			const data = islandData;
 			const root = document.getElementById("island-root");
 
 			let state = { ...data };

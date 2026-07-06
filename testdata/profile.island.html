@@ -175,10 +175,10 @@
 			</div>
 		</div>
 
-		<!-- Data island — inert JSON. islandc replaces the body with
-	             json.Marshal(d) at serve time. -->
-		<script id="island-data" type="application/json">
-			{
+		<!-- Data island — executable assignment. The object literal is JWCC;
+		     islandc replaces it with json.Marshal(d) at serve time. -->
+		<script id="island-data">
+			const islandData = {
 				"name": "Mara Okafor",
 				"role": "Staff Engineer · Platform",
 				"avatar": "https://i.pravatar.cc/120?img=47",
@@ -187,12 +187,12 @@
 					{ "label": "reviews / week", "value": 38 },
 					{ "label": "p50 latency", "value": 11.4 }
 				]
-			}
+			};
 		</script>
 
 		<!-- Renderer → pure client, replaces #island-root -->
 		<script type="module" data-island-render>
-			const data = JSON.parse(document.getElementById("island-data").textContent);
+			const data = islandData;
 			const root = document.getElementById("island-root");
 
 			// Format a stat value: integers stay integers, decimals keep one place.

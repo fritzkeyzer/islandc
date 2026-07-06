@@ -5,6 +5,7 @@ test: gen
     go test ./...
     go vet ./...
     islandc --resolve-deps testdata # runs the CLI
+    go run testdata/example/main.go # test the generated code
     go build github.com/fritzkeyzer/islandc/testdata # check that CLI output builds
 
 gen:

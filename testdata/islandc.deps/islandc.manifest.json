@@ -4,13 +4,22 @@
       "url": "https://cdn.jsdelivr.net/npm/open-props@1.7.0/open-props.min.css",
       "file": "860f1c4a7d44015e949f65aee04ac2b8fce63cf0fa898209609f23297dc03989.css",
       "kind": "css",
+      "sha256": "e6eecd74224fc5cdfae3c00f031d10a89daf83885ed163356d96eb42caf6cded",
       "downloaded_at": "2026-07-06T00:21:30.24873+02:00"
     },
     {
       "url": "https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js",
       "file": "c213894838ada545785d06464ddfbf2cb1612b4594bad8a1d4ac71e1a2feda6a.js",
       "kind": "js",
+      "sha256": "358d9afbb1ab5befa2f48061a30776e5bcd7707f410a606ba985f98bc3b1c034",
       "downloaded_at": "2026-07-06T00:21:30.258886+02:00"
+    },
+    {
+      "url": "https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,200..1000;1,6..12,200..1000\u0026display=swap",
+      "file": "fcd1555e12be0a173aaa67e00f36a622c1ccc7a81fce9ed886a2f6db22916cfc.css",
+      "kind": "css",
+      "sha256": "809063319b8971c12c6ba0bdc490955954e553d3a596f591ef779fc23cd77212",
+      "downloaded_at": "2026-07-06T18:58:36.463308+02:00"
     }
   ]
 }

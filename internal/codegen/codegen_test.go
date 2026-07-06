@@ -52,8 +52,8 @@ func TestGenerate_profileFixture(t *testing.T) {
 		"var profileHTML []byte",
 		"func RenderProfile(w io.Writer, d ProfileData) error {",
 		"json.Marshal(d)",
-		"injectIsland(w, profileHTML, blob,",
-		"func injectIsland(w io.Writer, html []byte, blob []byte, open, close int) error {",
+		"writeParts(w,",
+		"func writeParts(w io.Writer, parts ...[]byte) error {",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("generated output missing %q\n---\n%s", want, out)
@@ -143,9 +143,10 @@ func main() {
 		fmt.Println("real data missing from island-data slot")
 		return
 	}
-	// The slot must be pure JSON, not a JS assignment.
-	if strings.Contains(slot, "window.") {
-		fmt.Println("slot contains JS assignment, expected pure JSON")
+	// The slot must keep the userspace assignment prefix, with the
+	// marshaled JSON spliced in place of the placeholder literal.
+	if !strings.Contains(slot, "const islandData =") {
+		fmt.Println("slot missing the assignment prefix")
 		return
 	}
 	fmt.Println("OK")
@@ -168,7 +169,7 @@ func main() {
 func TestGenerate_multipleFilesStableOrder(t *testing.T) {
 	mk := func(name string) *island.File {
 		src := []byte(`<!DOCTYPE html><html><body>
-<script id="island-data" type="application/json">{"a":"hi"}</script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
 </body></html>`)
 		f, err := island.Parse(name, src)
 		if err != nil {
@@ -203,7 +204,7 @@ func TestGenerate_multipleFilesStableOrder(t *testing.T) {
 func mkIsland(t *testing.T, name, placeholder string) *island.File {
 	t.Helper()
 	src := []byte(`<!DOCTYPE html><html><body>
-<script id="island-data" type="application/json">` + placeholder + `</script>
+<script id="island-data">const islandData = ` + placeholder + `;</script>
 </body></html>`)
 	f, err := island.Parse(name, src)
 	if err != nil {
@@ -539,11 +540,12 @@ func TestGenerate_nameNormalization(t *testing.T) {
 	}
 }
 
-// TestBake_inlinesResolvedCDNDeps bakes an island with CDN deps (some
-// resolved, some not), compiles and runs the generated code against the
-// baked HTML, and verifies inlining, dedup, verbatim fallback, and that the
-// data island still splices real data after offsets shifted.
-func TestBake_inlinesResolvedCDNDeps(t *testing.T) {
+// TestGenerate_inlinesResolvedCDNDeps generates an island with CDN deps
+// (some resolved, some not), compiles and runs the generated code against
+// the source HTML plus vendor cache, and verifies render-time inlining,
+// dedup, verbatim fallback, and that the data island still splices real
+// data around the inlined content.
+func TestGenerate_inlinesResolvedCDNDeps(t *testing.T) {
 	cssURL := "https://cdn.example.com/shared.css"
 	jsURL := "https://cdn.example.com/util.js"
 	unresolvedURL := "https://cdn.example.com/missing.js"
@@ -559,7 +561,7 @@ func TestBake_inlinesResolvedCDNDeps(t *testing.T) {
 <link rel="stylesheet" href="` + cssURL + `" />
 <script src="` + jsURL + `" defer></script>
 <script src="` + unresolvedURL + `"></script>
-<script id="island-data" type="application/json">{"a":"hi"}</script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
 </body></html>`)
 	a, err := island.Parse("alpha.island.html", aHTML)
 	if err != nil {
@@ -567,33 +569,27 @@ func TestBake_inlinesResolvedCDNDeps(t *testing.T) {
 	}
 
 	resolved := map[string]string{cssURL: "shared.css", jsURL: "util.js"}
-	baked, warnings, err := Bake(a, resolved, func(name string) ([]byte, error) {
-		return vendored[name], nil
-	})
-	if err != nil {
-		t.Fatalf("Bake: %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("unexpected warnings: %v", warnings)
-	}
-	if baked == nil {
-		t.Fatal("Bake returned nil for island with resolved deps")
-	}
-
 	out, err := Generate(Config{
 		PackageName: "views",
 		Files:       []*island.File{a},
-		Baked:       map[string]*Baked{a.Path: baked},
+		Resolved:    resolved,
+		DepsDir:     "islandc.deps",
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if !strings.Contains(string(out), "//go:embed alpha.island.gen.html") {
-		t.Errorf("generated output must embed the baked file:\n%s", out)
+	for _, want := range []string{
+		"//go:embed islandc.deps/shared.css",
+		"//go:embed islandc.deps/util.js",
+		"//go:embed alpha.island.html",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("generated output missing %q:\n%s", want, out)
+		}
 	}
 
 	// Build and run a driver that renders the island and checks the output.
-	dir := writeTempModule(t, nil, out, `package main
+	dir := writeTempModule(t, []*island.File{a}, out, `package main
 
 import (
 	"bytes"
@@ -616,10 +612,8 @@ func main() {
 	fmt.Println("OK")
 }
 `)
-	// The generated file embeds the baked sibling, not the source.
-	if err := os.WriteFile(filepath.Join(dir, "views", "alpha.island.gen.html"), baked.HTML, 0o644); err != nil {
-		t.Fatalf("write baked html: %v", err)
-	}
+	// The generated file embeds the vendor cache alongside the source.
+	writeDeps(t, dir, vendored)
 	if build := exec(t, dir, "go", "build", "./..."); build != "" {
 		t.Fatalf("go build failed:\n%s", build)
 	}
@@ -628,38 +622,148 @@ func main() {
 	}
 }
 
-// TestBake_scriptEndTagInDepFallsBackVerbatim verifies that JS dep content
-// containing "</script>" is never inlined: the CDN tag ships verbatim.
-func TestBake_scriptEndTagInDepFallsBackVerbatim(t *testing.T) {
+// TestGenerate_scriptEndTagEscaped verifies that JS dep content containing
+// "</script>" is still inlined: the generated code escapes "</script" to
+// "<\/script" so the surrounding <script> element cannot be closed early.
+func TestGenerate_scriptEndTagEscaped(t *testing.T) {
 	jsURL := "https://cdn.example.com/evil.js"
 	src := []byte(`<!DOCTYPE html><html><body>
 <script src="` + jsURL + `"></script>
-<script id="island-data" type="application/json">{"a":"hi"}</script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
 </body></html>`)
 	f, err := island.Parse("x.island.html", src)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	baked, warnings, err := Bake(f, map[string]string{jsURL: "evil.js"}, func(string) ([]byte, error) {
-		return []byte("document.write('</script>');"), nil
+	out, err := Generate(Config{
+		PackageName: "views",
+		Files:       []*island.File{f},
+		Resolved:    map[string]string{jsURL: "evil.js"},
+		DepsDir:     "islandc.deps",
 	})
 	if err != nil {
-		t.Fatalf("Bake: %v", err)
+		t.Fatalf("Generate: %v", err)
 	}
-	if baked != nil {
-		t.Errorf("expected no baked output (nothing inlined), got %q", baked.HTML)
+
+	dir := writeTempModule(t, []*island.File{f}, out, `package main
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"gentest/views"
+)
+
+func main() {
+	var buf bytes.Buffer
+	if err := views.RenderX(&buf, views.XData{A: "y"}); err != nil { fmt.Println("ERR", err); return }
+	out := buf.String()
+	if !strings.Contains(out, "document.write('<\\/script>');") { fmt.Println("escaped content missing:", out); return }
+	if strings.Contains(out, "document.write('</script>');") { fmt.Println("raw </script> leaked into inlined JS"); return }
+	if !strings.Contains(out, `+"`"+`{"a":"y"}`+"`"+`) { fmt.Println("data not spliced:", out); return }
+	fmt.Println("OK")
+}
+`)
+	writeDeps(t, dir, map[string][]byte{"evil.js": []byte("document.write('</script>');")})
+	if build := exec(t, dir, "go", "build", "./..."); build != "" {
+		t.Fatalf("go build failed:\n%s", build)
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "cannot be inlined") {
-		t.Errorf("warnings = %v, want one </script> warning", warnings)
+	if got := exec(t, dir, "go", "run", "."); got != "OK\n" {
+		t.Fatalf("go run output = %q, want %q", got, "OK\n")
 	}
 }
 
-// TestBake_noResolvedDeps returns nil so the source file is embedded as-is.
-func TestBake_noResolvedDeps(t *testing.T) {
-	f := mkIsland(t, "x.island.html", `{"a":"hi"}`)
-	baked, warnings, err := Bake(f, nil, func(string) ([]byte, error) { return nil, nil })
-	if err != nil || baked != nil || len(warnings) != 0 {
-		t.Errorf("got (%v, %v, %v), want (nil, none, nil)", baked, warnings, err)
+// writeDeps writes vendored dep files into the temp module's views/islandc.deps
+// dir so the generated //go:embed directives resolve.
+func writeDeps(t *testing.T, moduleDir string, vendored map[string][]byte) {
+	t.Helper()
+	depsDir := filepath.Join(moduleDir, "views", "islandc.deps")
+	if err := os.MkdirAll(depsDir, 0o755); err != nil {
+		t.Fatalf("mkdir deps: %v", err)
+	}
+	for name, content := range vendored {
+		if err := os.WriteFile(filepath.Join(depsDir, name), content, 0o644); err != nil {
+			t.Fatalf("write dep %s: %v", name, err)
+		}
+	}
+}
+
+// TestGenerate_inlinesLocalFileDeps verifies that <script src="./bundle.js">
+// and <link rel=stylesheet href="./style.css"> are embedded from the package
+// dir (no islandc.deps/ prefix), spliced at render time, and compile+run.
+func TestGenerate_inlinesLocalFileDeps(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<link rel="stylesheet" href="./style.css" />
+<script src="./bundle.js" defer></script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
+</body></html>`)
+	f, err := island.Parse("x.island.html", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	// Local deps are added to resolved with the stripped path as the value.
+	resolved := map[string]string{
+		"./style.css": "style.css",
+		"./bundle.js": "bundle.js",
+	}
+	out, err := Generate(Config{
+		PackageName: "views",
+		Files:       []*island.File{f},
+		Resolved:    resolved,
+		DepsDir:     "islandc.deps",
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	s := string(out)
+	// Local deps embed from the package dir — no islandc.deps/ prefix.
+	for _, want := range []string{
+		"//go:embed style.css",
+		"//go:embed bundle.js",
+		`[]byte("<script defer>")`,
+		`[]byte("<style>")`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("generated output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(s, "//go:embed islandc.deps/style.css") {
+		t.Errorf("local CSS dep must not embed from islandc.deps/: %s", s)
+	}
+
+	// Build + run: the local files are written into the views package dir.
+	dir := writeTempModule(t, []*island.File{f}, out, `package main
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"gentest/views"
+)
+
+func main() {
+	var buf bytes.Buffer
+	if err := views.RenderX(&buf, views.XData{A: "y"}); err != nil { fmt.Println("ERR", err); return }
+	out := buf.String()
+	if !strings.Contains(out, "body { color: green; }") { fmt.Println("local CSS not spliced:", out); return }
+	if !strings.Contains(out, "window.bundle = true;") { fmt.Println("local JS not spliced:", out); return }
+	if strings.Contains(out, `+"`"+`href="./style.css"`+"`"+`) { fmt.Println("local CSS href leaked"); return }
+	if strings.Contains(out, `+"`"+`src="./bundle.js"`+"`"+`) { fmt.Println("local JS src leaked"); return }
+	if !strings.Contains(out, `+"`"+`{"a":"y"}`+"`"+`) { fmt.Println("data not spliced:", out); return }
+	fmt.Println("OK")
+}
+`)
+	if err := os.WriteFile(filepath.Join(dir, "views", "style.css"), []byte("body { color: green; }\n"), 0o644); err != nil {
+		t.Fatalf("write style.css: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "views", "bundle.js"), []byte("window.bundle = true;\n"), 0o644); err != nil {
+		t.Fatalf("write bundle.js: %v", err)
+	}
+	if build := exec(t, dir, "go", "build", "./..."); build != "" {
+		t.Fatalf("go build failed:\n%s", build)
+	}
+	if got := exec(t, dir, "go", "run", "."); got != "OK\n" {
+		t.Fatalf("go run output = %q, want %q", got, "OK\n")
 	}
 }
 

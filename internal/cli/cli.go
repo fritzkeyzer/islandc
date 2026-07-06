@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/fritzkeyzer/islandc/internal/audit"
 	"github.com/fritzkeyzer/islandc/internal/codegen"
 	"github.com/fritzkeyzer/islandc/internal/deps"
 	"github.com/fritzkeyzer/islandc/internal/docs"
@@ -32,13 +33,16 @@ func Run(args []string, out, errw io.Writer) int {
 		fmt.Fprintln(errw, "")
 		fmt.Fprintln(errw, "Scans <target-dir> for *.island.html, writes one .go file per dir.")
 		fmt.Fprintln(errw, "CDN deps (http(s) <link>/<script src>) ship verbatim by default;")
-		fmt.Fprintln(errw, "--resolve-deps downloads and bakes them inline.")
+		fmt.Fprintln(errw, "--resolve-deps downloads and embeds them, spliced in at render time.")
+		fmt.Fprintln(errw, "Local file deps (./x.js, ./x.css) are always embedded from the package dir.")
+		fmt.Fprintln(errw, "--strict fails the build if any external URL survives into the output.")
 	}
 
 	pkgName := fs.String("pkg", "", "Go package name (default: dir base name)")
 	outName := fs.String("out", "islandc.gen.go", "name of the generated Go file")
 	recursive := fs.Bool("r", false, "recurse into subdirectories; one .go file per dir")
-	resolveDeps := fs.Bool("resolve-deps", false, "download CDN deps into <target>/islandc.deps/ and bake inlined <name>.island.gen.html files; unresolved deps ship verbatim")
+	resolveDeps := fs.Bool("resolve-deps", false, "download CDN deps into <target>/islandc.deps/, embed them, and splice them in at render time; unresolved deps ship verbatim")
+	strict := fs.Bool("strict", false, "fail the build if any external URL survives into the generated output (hermeticity check)")
 	quiet := fs.Bool("q", false, "suppress progress output")
 	showHelp := fs.Bool("help", false, "print the README (wrapped in <readme> XML)")
 	showDocs := fs.Bool("docs", false, "print the island-flavoured HTML reference (wrapped in <island-flavoured-html> XML)")
@@ -84,7 +88,7 @@ func Run(args []string, out, errw io.Writer) int {
 
 	var hadError bool
 	for _, dir := range dirs {
-		if err := generateDir(dir, *pkgName, *outName, *resolveDeps, *quiet, out, errw); err != nil {
+		if err := generateDir(dir, *pkgName, *outName, *resolveDeps, *strict, *quiet, out, errw); err != nil {
 			fmt.Fprintf(errw, "islandc: %s: %v\n", dir, err)
 			hadError = true
 		}
@@ -163,7 +167,7 @@ func dirHasIslands(dir string) (bool, error) {
 	return false, nil
 }
 
-func generateDir(dir, pkgName, outName string, resolveDeps bool, quiet bool, out, errw io.Writer) error {
+func generateDir(dir, pkgName, outName string, resolveDeps, strict, quiet bool, out, errw io.Writer) error {
 	files, err := parseDir(dir)
 	if err != nil {
 		return err
@@ -175,7 +179,16 @@ func generateDir(dir, pkgName, outName string, resolveDeps bool, quiet bool, out
 		pkgName = sanitizePkgName(filepath.Base(dir))
 	}
 
-	baked, err := resolveAndBake(dir, files, resolveDeps, quiet, out, errw)
+	resolved, err := resolveCDNDeps(dir, files, resolveDeps, quiet, out, errw)
+	if err != nil {
+		return err
+	}
+
+	// Local file deps are always-on: stat each and add the existing ones to
+	// the resolved map (value = path with leading ./ stripped, so codegen
+	// embeds from the package dir, not the deps cache). Missing local files
+	// warn (or fail under --strict) and ship verbatim.
+	resolved, err = resolveLocalDeps(dir, files, resolved, strict, errw)
 	if err != nil {
 		return err
 	}
@@ -184,17 +197,11 @@ func generateDir(dir, pkgName, outName string, resolveDeps bool, quiet bool, out
 		PackageName: pkgName,
 		Files:       files,
 		Version:     currentVersion(),
-		Baked:       baked,
+		Resolved:    resolved,
+		DepsDir:     deps.CacheDir,
 	})
 	if err != nil {
 		return err
-	}
-
-	// Remove stale baked files for islands not baked this run.
-	for _, f := range files {
-		if _, ok := baked[f.Path]; !ok {
-			os.Remove(filepath.Join(dir, codegen.BakedPath(f.Path)))
-		}
 	}
 
 	outPath := filepath.Join(dir, outName)
@@ -204,7 +211,64 @@ func generateDir(dir, pkgName, outName string, resolveDeps bool, quiet bool, out
 	if !quiet {
 		fmt.Fprintf(out, "islandc: wrote %s (%d island(s))\n", outPath, len(files))
 	}
+
+	// Hermeticity audit: always runs. Findings are warnings by default;
+	// under --strict, any Strict finding fails the build.
+	depContents, err := readDepContents(dir, files, resolved)
+	if err != nil {
+		return err
+	}
+	var strictFailure bool
+	for _, f := range files {
+		for _, finding := range audit.CheckIsland(f, depContents) {
+			if finding.Strict && strict {
+				fmt.Fprintf(errw, "islandc: %s: error: %s\n", f.Path, finding)
+				strictFailure = true
+			} else {
+				fmt.Fprintf(errw, "islandc: %s: warning: %s\n", f.Path, finding)
+			}
+		}
+	}
+	if strictFailure {
+		return fmt.Errorf("hermeticity check failed (external URLs survive under --strict)")
+	}
 	return nil
+}
+
+// readDepContents reads each resolved dep's cached file into a map keyed by
+// URL, so the audit can scan inlined CSS/JS content. CDN deps read from the
+// deps cache dir; local deps read from the package dir. Returns an empty map
+// when nothing is resolved.
+func readDepContents(dir string, files []*island.File, resolved map[string]string) (map[string][]byte, error) {
+	if len(resolved) == 0 {
+		return nil, nil
+	}
+	localURLs := map[string]bool{}
+	for _, f := range files {
+		for _, d := range f.Deps {
+			if d.Local {
+				localURLs[d.URL] = true
+			}
+		}
+	}
+	depsDir := filepath.Join(dir, deps.CacheDir)
+	out := make(map[string][]byte, len(resolved))
+	for u, name := range resolved {
+		var p string
+		if localURLs[u] {
+			p = filepath.Join(dir, name)
+		} else {
+			p = filepath.Join(depsDir, name)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			// Stale cache or missing file: skip — the dep ships verbatim
+			// and the audit catches the surviving tag.
+			continue
+		}
+		out[u] = b
+	}
+	return out, nil
 }
 
 func parseDir(dir string) ([]*island.File, error) {
@@ -231,11 +295,11 @@ func parseDir(dir string) ([]*island.File, error) {
 	return files, nil
 }
 
-// resolveAndBake downloads any missing CDN deps and bakes each island's
-// resolved deps into an inlined sibling file. Unresolved deps fall back to
-// the verbatim CDN URL. Returns nil map when dep resolution is disabled or
-// there are no deps to resolve.
-func resolveAndBake(dir string, files []*island.File, resolveDeps, quiet bool, out, errw io.Writer) (map[string]*codegen.Baked, error) {
+// resolveCDNDeps downloads any missing CDN deps into the vendor cache and
+// returns the URL -> cache filename map for codegen to embed and splice at
+// render time. Unresolved deps fall back to the verbatim CDN URL. Returns
+// nil when dep resolution is disabled or there are no deps to resolve.
+func resolveCDNDeps(dir string, files []*island.File, resolveDeps, quiet bool, out, errw io.Writer) (map[string]string, error) {
 	if !resolveDeps {
 		return nil, nil
 	}
@@ -250,46 +314,26 @@ func resolveAndBake(dir string, files []*island.File, resolveDeps, quiet bool, o
 	for _, u := range res.Missing {
 		fmt.Fprintf(errw, "islandc: %s: warning: could not resolve CDN dep %q; it will ship verbatim\n", dir, u)
 	}
+	for _, w := range res.Warnings {
+		fmt.Fprintf(errw, "islandc: %s: warning: dep %s\n", dir, w)
+	}
 	if !quiet {
 		fmt.Fprintf(out, "islandc: %s: resolved %d dep(s), %d unresolved\n", dir, len(res.Resolved), len(res.Missing))
 	}
-	return bakeFiles(dir, files, res, errw)
-}
-
-// bakeFiles inlines each island's resolved deps and writes the baked sibling
-// files. Islands with no resolved deps are absent from the map.
-func bakeFiles(dir string, files []*island.File, res *deps.Result, errw io.Writer) (map[string]*codegen.Baked, error) {
-	baked := map[string]*codegen.Baked{}
-	read := func(name string) ([]byte, error) {
-		return os.ReadFile(filepath.Join(res.Dir, name))
-	}
-	for _, f := range files {
-		b, warnings, err := codegen.Bake(f, res.Resolved, read)
-		for _, w := range warnings {
-			fmt.Fprintf(errw, "islandc: %s: warning: %s\n", dir, w)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if b == nil {
-			continue
-		}
-		bakedPath := filepath.Join(dir, codegen.BakedPath(f.Path))
-		if err := os.WriteFile(bakedPath, b.HTML, 0o644); err != nil {
-			return nil, fmt.Errorf("write %s: %w", bakedPath, err)
-		}
-		baked[f.Path] = b
-	}
-	return baked, nil
+	return res.Resolved, nil
 }
 
 // collectDepURLs returns the unique CDN URLs across all files and a map from
-// each URL to its kind ("css" or "js") for the manifest.
+// each URL to its kind ("css" or "js") for the manifest. Local deps are
+// excluded — they're handled by resolveLocalDeps.
 func collectDepURLs(files []*island.File) (urls []string, kindOf map[string]string) {
 	seen := map[string]bool{}
 	kindOf = map[string]string{}
 	for _, f := range files {
 		for _, d := range f.Deps {
+			if d.Local {
+				continue
+			}
 			if seen[d.URL] {
 				continue
 			}
@@ -299,6 +343,38 @@ func collectDepURLs(files []*island.File) (urls []string, kindOf map[string]stri
 		}
 	}
 	return urls, kindOf
+}
+
+// resolveLocalDeps stats each local file dep and adds existing ones to
+// resolved (value = path with leading "./" stripped, embedded from the
+// package dir). Missing local files warn, or fail the build under --strict.
+func resolveLocalDeps(dir string, files []*island.File, resolved map[string]string, strict bool, errw io.Writer) (map[string]string, error) {
+	seen := map[string]bool{}
+	var hadMissing bool
+	for _, f := range files {
+		for _, d := range f.Deps {
+			if !d.Local || seen[d.URL] {
+				continue
+			}
+			seen[d.URL] = true
+			rel := strings.TrimPrefix(d.URL, "./")
+			if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+				fmt.Fprintf(errw, "islandc: %s: warning: local dep %q not found; it will ship verbatim\n", f.Path, d.URL)
+				if strict {
+					hadMissing = true
+				}
+				continue
+			}
+			if resolved == nil {
+				resolved = map[string]string{}
+			}
+			resolved[d.URL] = rel
+		}
+	}
+	if hadMissing {
+		return resolved, fmt.Errorf("hermeticity check failed (missing local dep under --strict)")
+	}
+	return resolved, nil
 }
 
 // currentVersion parses the embedded version.json and returns the "version"

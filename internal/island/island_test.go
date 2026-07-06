@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// wrap builds a minimal island file around the given data-island body.
+// wrap builds a minimal island file around the given data object literal.
 func wrap(body string) []byte {
 	return []byte(`<!DOCTYPE html><html><body>
-<script id="island-data" type="application/json">` + body + `</script>
+<script id="island-data">const islandData = ` + body + `;</script>
 </body></html>`)
 }
 
@@ -37,20 +37,24 @@ func TestParse_profileFixture(t *testing.T) {
 		t.Errorf("stats schema missing items")
 	}
 
-	// Splice bounds are the whole script body: the generated code
-	// regenerates json.Marshal(data) between the tags.
+	// Splice bounds are the object literal: the generated code splices
+	// json.Marshal(data) between the '{' and matching '}', preserving the
+	// assignment prefix/suffix verbatim.
 	body := f.HTML[f.DataOpen:f.DataClose]
 	if !bytes.Contains(body, []byte(`"name"`)) {
 		t.Errorf("body must contain the placeholder JSON; got %q", body)
 	}
+	if body[0] != '{' || body[len(body)-1] != '}' {
+		t.Errorf("literal bounds must delimit the object; got %q...%q", body[0], body[len(body)-1])
+	}
 	if !bytes.Contains(f.HTML[:f.DataOpen], []byte(`id="island-data"`)) {
 		t.Errorf("DataOpen does not follow the island-data opening tag")
 	}
-	if !bytes.Contains(f.HTML[:f.DataOpen], []byte(`type="application/json"`)) {
-		t.Errorf("DataOpen does not follow the type attribute")
+	if !bytes.Contains(f.HTML[:f.DataOpen], []byte(`const islandData`)) {
+		t.Errorf("DataOpen does not follow the assignment prefix")
 	}
-	if !bytes.HasPrefix(f.HTML[f.DataClose:], []byte("</script>")) {
-		t.Errorf("DataClose must point at the closing tag; got %q", f.HTML[f.DataClose:f.DataClose+12])
+	if !bytes.Contains(f.HTML[f.DataClose:], []byte("</script>")) {
+		t.Errorf("DataClose must precede the closing tag; got %q", f.HTML[f.DataClose:f.DataClose+12])
 	}
 }
 
@@ -139,30 +143,30 @@ func TestParse_allowsTrailingCommas(t *testing.T) {
 	}
 }
 
-func TestParse_dataScriptMustHaveTypeJSON(t *testing.T) {
+func TestParse_dataScriptRejectsTypeAttr(t *testing.T) {
 	cases := []struct {
 		name string
 		html string
 	}{
 		{
-			"missing type attr",
+			"old inert JSON form",
 			`<!DOCTYPE html><html><body>
 <div id="island-root"></div>
-<script id="island-data">{"a":"hi"}</script>
+<script id="island-data" type="application/json">{"a":"hi"}</script>
 </body></html>`,
 		},
 		{
-			"wrong type (module)",
+			"module type",
 			`<!DOCTYPE html><html><body>
 <div id="island-root"></div>
-<script id="island-data" type="module">{"a":"hi"}</script>
+<script id="island-data" type="module">const islandData = {"a":"hi"};</script>
 </body></html>`,
 		},
 		{
-			"old executable format",
+			"redundant default type",
 			`<!DOCTYPE html><html><body>
 <div id="island-root"></div>
-<script id="island-data" type="text/javascript">window.X = {"a":"hi"};</script>
+<script id="island-data" type="text/javascript">const islandData = {"a":"hi"};</script>
 </body></html>`,
 		},
 	}
@@ -171,12 +175,67 @@ func TestParse_dataScriptMustHaveTypeJSON(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := Parse("x.island.html", []byte(c.html))
 			if err == nil {
-				t.Fatal("expected error for wrong/missing type, got nil")
+				t.Fatal("expected error for type attribute on data script, got nil")
 			}
-			if !strings.Contains(err.Error(), `type="application/json"`) {
-				t.Errorf("error should mention required type; got %v", err)
+			if !strings.Contains(err.Error(), "must not have a type attribute") {
+				t.Errorf("error should mention the type attribute; got %v", err)
 			}
 		})
+	}
+}
+
+func TestParse_literalBoundsInAssignment(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<script id="island-data">
+	// leading comment with a stray { brace
+	const islandData = {
+		"a": "hi }", // trailing comment with a } brace
+		"b": { "c": 1 },
+	};
+</script>
+</body></html>`)
+	f, err := Parse("x.island.html", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	lit := string(f.HTML[f.DataOpen:f.DataClose])
+	if !strings.HasPrefix(lit, "{") || !strings.HasSuffix(lit, "}") {
+		t.Errorf("literal bounds wrong: %q", lit)
+	}
+	if strings.Contains(lit, "const islandData") || strings.Contains(lit, ";") {
+		t.Errorf("literal must exclude the assignment prefix/suffix: %q", lit)
+	}
+	if !strings.Contains(string(f.HTML[:f.DataOpen]), "const islandData =") {
+		t.Errorf("prefix must precede DataOpen")
+	}
+	if !strings.Contains(string(f.HTML[f.DataClose:]), ";") {
+		t.Errorf("suffix must follow DataClose")
+	}
+	if got := f.Schema.Properties["a"].Comment; got != "trailing comment with a } brace" {
+		t.Errorf("a comment = %q", got)
+	}
+}
+
+func TestParse_bareObjectBodyIsError(t *testing.T) {
+	// A bare object without an assignment is a JS syntax error in the
+	// browser (parsed as a block statement), so require the assignment.
+	// The scanner only needs a '{' — a bare literal still parses — but an
+	// empty/absent literal must error.
+	src := []byte(`<!DOCTYPE html><html><body>
+<script id="island-data">const islandData = ;</script>
+</body></html>`)
+	if _, err := Parse("x.island.html", src); err == nil {
+		t.Fatal("expected error for missing object literal, got nil")
+	}
+}
+
+func TestParse_unbalancedBracesIsError(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<script id="island-data">const islandData = {"a": {"b": 1};</script>
+</body></html>`)
+	_, err := Parse("x.island.html", src)
+	if err == nil || !strings.Contains(err.Error(), "unbalanced") {
+		t.Fatalf("expected unbalanced-braces error, got %v", err)
 	}
 }
 
@@ -207,7 +266,7 @@ func TestParse_nonObjectPlaceholder(t *testing.T) {
 
 func TestParse_attributeQuotingVariants(t *testing.T) {
 	src := []byte(`<!DOCTYPE html><html><body>
-<script  id = 'island-data' type = 'application/json' >{"a":"hi"}</script>
+<script  id = 'island-data' >const islandData = {"a":"hi"};</script>
 </body></html>`)
 	if _, err := Parse("x.island.html", src); err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -234,7 +293,7 @@ func TestParse_findsCDNDeps(t *testing.T) {
 	src := []byte(`<!DOCTYPE html><html><body>
 <link rel="stylesheet" href="https://cdn.example.com/base.css" />
 <script src="https://cdn.example.com/util.js" defer></script>
-<script id="island-data" type="application/json">{"a":"hi"}</script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
 </body></html>`)
 	f, err := Parse("widget.island.html", src)
 	if err != nil {
@@ -269,14 +328,24 @@ func TestParse_ignoresNonCDNDeps(t *testing.T) {
 <script src="./local.js"></script>
 <script src="data:text/javascript,alert(1)"></script>
 <script data-src="https://cdn.example.com/not-a-dep.js"></script>
-<script id="island-data" type="application/json">{"a":"hi"}</script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
 </body></html>`)
 	f, err := Parse("x.island.html", src)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if len(f.Deps) != 0 {
-		t.Errorf("got %d deps, want 0 (non-CDN refs must be ignored): %+v", len(f.Deps), f.Deps)
+	// Local file deps (./relative.css, ./local.js) are always-on: they
+	// become DepRefs with Local=true. /abs, //proto, and data: remain
+	// ignored (not local, not CDN).
+	if len(f.Deps) != 2 {
+		t.Fatalf("got %d deps, want 2 (./relative.css and ./local.js): %+v", len(f.Deps), f.Deps)
+	}
+	css, js := f.Deps[0], f.Deps[1]
+	if css.URL != "./relative.css" || css.Kind != DepCSS || !css.Local {
+		t.Errorf("css dep = %+v, want Local CSS ./relative.css", css)
+	}
+	if js.URL != "./local.js" || js.Kind != DepJS || !js.Local {
+		t.Errorf("js dep = %+v, want Local JS ./local.js", js)
 	}
 }
 
@@ -284,7 +353,7 @@ func TestParse_recordsDuplicateDepOccurrences(t *testing.T) {
 	src := []byte(`<!DOCTYPE html><html><body>
 <link rel="stylesheet" href="https://cdn.example.com/base.css" />
 <link rel="stylesheet" href="https://cdn.example.com/base.css" />
-<script id="island-data" type="application/json">{"a":"hi"}</script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
 </body></html>`)
 	f, err := Parse("x.island.html", src)
 	if err != nil {
@@ -297,7 +366,7 @@ func TestParse_recordsDuplicateDepOccurrences(t *testing.T) {
 
 func TestParse_ignoresURLsInsideScriptContent(t *testing.T) {
 	src := []byte(`<!DOCTYPE html><html><body>
-<script id="island-data" type="application/json">{"a":"hi"}</script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
 <script type="module">
 	const s = '<link rel="stylesheet" href="https://cdn.example.com/fake.css">';
 	console.log(s);

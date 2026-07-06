@@ -77,21 +77,22 @@
 			</div>
 		</div>
 
-		<!-- Data island — inert JSON. islandc replaces the body with
-		     json.Marshal(d) at serve time. -->
-		<script id="island-data" type="application/json">
-			{
+		<!-- Data island — executable assignment. The object literal is JWCC;
+		     islandc replaces it with json.Marshal(d) at serve time. Trailing
+		     // comments on properties become Go doc comments. -->
+		<script id="island-data">
+			const islandData = {
 				"count": 0, // current click count
 				"label": "clicks",
 				"step": 1, // amount added/removed per click
 				"min": -99,
 				"max": 99
-			}
+			};
 		</script>
 
 		<!-- Render script — pure client, rewrites #island-root. -->
 		<script type="module" data-island-render>
-			const data = JSON.parse(document.getElementById("island-data").textContent);
+			const data = islandData;
 			const root = document.getElementById("island-root");
 
 			let state = { ...data };

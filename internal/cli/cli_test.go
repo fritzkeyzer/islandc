@@ -64,7 +64,7 @@ func TestRun_endToEnd(t *testing.T) {
 		"package views",
 		"type ProfileData struct {",
 		"func RenderProfile(",
-		"func injectIsland(",
+		"func writeParts(",
 	} {
 		if !strings.Contains(gens, want) {
 			t.Errorf("generated file missing %q", want)
@@ -197,6 +197,64 @@ func TestSanitizePkgName(t *testing.T) {
 	}
 }
 
+// TestRun_localDeps verifies local file deps (<script src="./x.js">,
+// <link rel=stylesheet href="./x.css">) are always-on: present files are
+// embedded from the package dir and splice in at render time; missing files
+// warn by default and fail under --strict.
+func TestRun_localDeps(t *testing.T) {
+	const islandHTML = `<!DOCTYPE html><html><body>
+<link rel="stylesheet" href="./style.css" />
+<script src="./bundle.js"></script>
+<script id="island-data">const islandData = {"a":"hi"};</script>
+</body></html>`
+
+	present := t.TempDir()
+	if err := os.WriteFile(filepath.Join(present, "x.island.html"), []byte(islandHTML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(present, "style.css"), []byte("body{color:green}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(present, "bundle.js"), []byte("window.b=true"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errw bytes.Buffer
+	if code := Run([]string{present}, &out, &errw); code != 0 {
+		t.Fatalf("present local deps: exit=%d stderr=%s", code, errw.String())
+	}
+	gen, err := os.ReadFile(filepath.Join(present, "islandc.gen.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"//go:embed style.css", "//go:embed bundle.js"} {
+		if !strings.Contains(string(gen), want) {
+			t.Errorf("generated file missing %q: %s", want, gen)
+		}
+	}
+
+	// Missing local dep: warning by default (exit 0).
+	missing := t.TempDir()
+	if err := os.WriteFile(filepath.Join(missing, "x.island.html"), []byte(islandHTML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errw.Reset()
+	if code := Run([]string{missing}, &out, &errw); code != 0 {
+		t.Errorf("missing local dep (non-strict): exit=%d, want 0; stderr=%s", code, errw.String())
+	}
+	if !strings.Contains(errw.String(), "local dep") {
+		t.Errorf("missing local dep should warn: %s", errw.String())
+	}
+
+	// Missing local dep under --strict: exit 1.
+	out.Reset()
+	errw.Reset()
+	if code := Run([]string{"-strict", missing}, &out, &errw); code != 1 {
+		t.Errorf("missing local dep (strict): exit=%d, want 1; stderr=%s", code, errw.String())
+	}
+}
+
 func projectRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
@@ -209,4 +267,49 @@ func projectRoot(t *testing.T) string {
 		t.Fatalf("go.mod not found at %s", root)
 	}
 	return root
+}
+
+// TestRun_strictFailsOnExternalURL verifies that --strict returns exit 1 when
+// an island has a surviving external URL, and exit 0 when the island is
+// hermetic.
+func TestRun_strict(t *testing.T) {
+	const externalHTML = `<!DOCTYPE html><html><body>
+<img src="https://example.com/a.png" alt="" />
+<script id="island-data">const islandData = {"a":"hi"};</script>
+</body></html>`
+	const hermeticHTML = `<!DOCTYPE html><html><body>
+<img src="./local.png" alt="" />
+<script id="island-data">const islandData = {"a":"hi"};</script>
+</body></html>`
+
+	mk := func(html string) string {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "x.island.html"), []byte(html), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	// Non-hermetic under --strict → exit 1.
+	var out, errw bytes.Buffer
+	if code := Run([]string{"-strict", mk(externalHTML)}, &out, &errw); code != 1 {
+		t.Errorf("strict + external URL: exit=%d, want 1; stderr=%s", code, errw.String())
+	}
+	if !strings.Contains(errw.String(), "external URL in <img src>") {
+		t.Errorf("strict stderr missing finding: %s", errw.String())
+	}
+
+	// Hermetic under --strict → exit 0.
+	out.Reset()
+	errw.Reset()
+	if code := Run([]string{"-strict", mk(hermeticHTML)}, &out, &errw); code != 0 {
+		t.Errorf("strict + hermetic: exit=%d, want 0; stderr=%s", code, errw.String())
+	}
+
+	// Non-hermetic WITHOUT --strict → still exit 0 (warning only).
+	out.Reset()
+	errw.Reset()
+	if code := Run([]string{mk(externalHTML)}, &out, &errw); code != 0 {
+		t.Errorf("non-strict + external URL: exit=%d, want 0; stderr=%s", code, errw.String())
+	}
 }

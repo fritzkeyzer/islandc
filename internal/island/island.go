@@ -1,8 +1,10 @@
 // Package island parses .island.html files: HTML with one convention — a
-// data island (<script id="island-data" type="application/json"> with a JWCC
-// object body). The schema is inferred from the placeholder; trailing
-// comments become Go doc comments. CDN deps (http(s) <link>/<script src>) are
-// detected for optional vendoring via --resolve-deps.
+// data island (<script id="island-data"> whose body is a single assignment
+// statement, conventionally `const islandData = { ... };`, where the object
+// literal is JWCC). The schema is inferred from the placeholder literal;
+// trailing comments become Go doc comments. CDN deps (http(s)
+// <link>/<script src>) are detected for optional vendoring via
+// --resolve-deps.
 package island
 
 import (
@@ -28,9 +30,10 @@ type File struct {
 	HTML []byte
 	// Schema is the data shape inferred from the placeholder literal.
 	Schema *Schema
-	// DataOpen and DataClose are the byte offsets of the data island
-	// script's inner body within HTML. The generated code replaces the
-	// whole body with json.Marshal(data) at serve time.
+	// DataOpen and DataClose are the byte offsets of the data island's
+	// object literal within HTML ('{' inclusive to just past '}'). The
+	// generated code replaces the literal with json.Marshal(data) at serve
+	// time; the surrounding assignment prefix/suffix ship verbatim.
 	DataOpen, DataClose int
 	// Deps are the CDN lib imports found in the file, in document order.
 	Deps []DepRef
@@ -44,10 +47,14 @@ const (
 	DepJS  DepKind = "js"
 )
 
-// DepRef is one occurrence of a CDN lib import.
+// DepRef is one occurrence of a lib import (CDN or local file).
 type DepRef struct {
 	URL  string
 	Kind DepKind
+	// Local is true when URL is a relative file path (./bundle.js or
+	// bare sub/x.js) — the dep is embedded from the package dir, not
+	// downloaded. False for http(s) CDN URLs.
+	Local bool
 	// TagStart and TagEnd delimit the whole tag within HTML: for CSS the
 	// <link ...> tag, for JS the <script ...>...</script> block.
 	TagStart, TagEnd int
@@ -77,11 +84,17 @@ func Parse(filePath string, src []byte) (*File, error) {
 		return nil, fmt.Errorf("%s: %w", filePath, err)
 	}
 	if !doc.foundData {
-		return nil, fmt.Errorf("%s: data island not found (need <script id=\"island-data\" type=\"application/json\">)", filePath)
+		return nil, fmt.Errorf("%s: data island not found (need <script id=\"island-data\"> with body `const islandData = { ... };`)", filePath)
 	}
 
-	body := src[doc.dataOpen:doc.dataClose]
-	v, err := hujson.Parse(body)
+	litOpen, litClose, err := findObjectLiteral(src[doc.dataOpen:doc.dataClose])
+	if err != nil {
+		return nil, fmt.Errorf("%s: island-data: %w", filePath, err)
+	}
+	dataOpen := doc.dataOpen + litOpen
+	dataClose := doc.dataOpen + litClose
+
+	v, err := hujson.Parse(src[dataOpen:dataClose])
 	if err != nil {
 		return nil, fmt.Errorf("%s: island-data placeholder is not valid JWCC: %w", filePath, err)
 	}
@@ -103,8 +116,8 @@ func Parse(filePath string, src []byte) (*File, error) {
 		RenderFunc: "Render" + name,
 		HTML:       src,
 		Schema:     schema,
-		DataOpen:   doc.dataOpen,
-		DataClose:  doc.dataClose,
+		DataOpen:   dataOpen,
+		DataClose:  dataClose,
 		Deps:       doc.deps,
 	}, nil
 }
@@ -123,7 +136,8 @@ type pendingScript struct {
 	tagStart int    // start of the <script ...> tag
 	openEnd  int    // just past the opening tag
 	isData   bool   // id="island-data"
-	srcURL   string // http(s) src attribute, if any
+	srcURL   string // http(s) or local src, if any
+	local    bool   // srcURL is a local file path
 	openTag  string // rebuilt open tag without src (for dep inlining)
 }
 
@@ -153,11 +167,20 @@ func scan(src []byte) (*doc, error) {
 			tag, attrs := tagAttrs(z)
 			switch tag {
 			case "link":
-				if attrs["rel"] == "stylesheet" && isCDNURL(attrs["href"]) {
-					d.deps = append(d.deps, DepRef{
-						URL: attrs["href"], Kind: DepCSS,
-						TagStart: start, TagEnd: offset,
-					})
+				if attrs["rel"] == "stylesheet" {
+					href := attrs["href"]
+					switch {
+					case isCDNURL(href):
+						d.deps = append(d.deps, DepRef{
+							URL: href, Kind: DepCSS,
+							TagStart: start, TagEnd: offset,
+						})
+					case isLocalURL(href):
+						d.deps = append(d.deps, DepRef{
+							URL: href, Kind: DepCSS, Local: true,
+							TagStart: start, TagEnd: offset,
+						})
+					}
 				}
 			case "script":
 				if tt == html.SelfClosingTagToken {
@@ -168,13 +191,21 @@ func scan(src []byte) (*doc, error) {
 					if d.foundData {
 						return nil, fmt.Errorf("multiple island-data scripts")
 					}
-					if attrs["type"] != "application/json" {
-						return nil, fmt.Errorf("island-data script must have type=\"application/json\" (got %q); the body is a JWCC object literal, not executable JS", attrs["type"])
+					if t, ok := attrs["type"]; ok {
+						return nil, fmt.Errorf("island-data script must not have a type attribute (got type=%q); the body is an executable assignment `const islandData = { ... };`", t)
 					}
 					script.isData = true
-				} else if isCDNURL(attrs["src"]) {
-					script.srcURL = attrs["src"]
-					script.openTag = rebuildTag("script", attrs, "src")
+				} else {
+					src := attrs["src"]
+					switch {
+					case isCDNURL(src):
+						script.srcURL = src
+						script.openTag = rebuildTag("script", attrs, "src")
+					case isLocalURL(src):
+						script.srcURL = src
+						script.local = true
+						script.openTag = rebuildTag("script", attrs, "src")
+					}
 				}
 			}
 
@@ -189,7 +220,7 @@ func scan(src []byte) (*doc, error) {
 				d.dataClose = start
 			} else if script.srcURL != "" {
 				d.deps = append(d.deps, DepRef{
-					URL: script.srcURL, Kind: DepJS,
+					URL: script.srcURL, Kind: DepJS, Local: script.local,
 					TagStart: script.tagStart, TagEnd: offset,
 					ScriptOpenTag: script.openTag,
 				})
@@ -197,6 +228,90 @@ func scan(src []byte) (*doc, error) {
 			script = nil
 		}
 	}
+}
+
+// findObjectLiteral locates the object literal within a data island script
+// body: it returns the byte offsets of the opening '{' (inclusive) and just
+// past its matching '}'. The body is a single assignment statement,
+// conventionally `const islandData = { ... };` — everything before the '{'
+// and after the matching '}' is userspace, preserved verbatim at render
+// time. Brace matching respects string literals (single, double, backtick)
+// and // and /* */ comments.
+func findObjectLiteral(body []byte) (int, int, error) {
+	n := len(body)
+	open := -1
+	for i := 0; i < n; {
+		if j := skipComment(body, i); j != i {
+			i = j
+			continue
+		}
+		if body[i] == '{' {
+			open = i
+			break
+		}
+		i++
+	}
+	if open < 0 {
+		return 0, 0, fmt.Errorf("no object literal found (the body must be a single assignment like `const islandData = { ... };`)")
+	}
+
+	depth := 0
+	for i := open; i < n; {
+		if j := skipComment(body, i); j != i {
+			i = j
+			continue
+		}
+		switch c := body[i]; c {
+		case '{':
+			depth++
+			i++
+		case '}':
+			depth--
+			i++
+			if depth == 0 {
+				return open, i, nil
+			}
+		case '"', '\'', '`':
+			i++
+			for i < n && body[i] != c {
+				if body[i] == '\\' {
+					i++
+				}
+				i++
+			}
+			i++ // past the closing quote
+		default:
+			i++
+		}
+	}
+	return 0, 0, fmt.Errorf("unbalanced braces in the data object literal")
+}
+
+// skipComment advances past a // or /* */ comment starting at i, returning
+// the index just past it (clamped to len(body)), or i unchanged if no
+// comment starts there.
+func skipComment(body []byte, i int) int {
+	if i+1 >= len(body) || body[i] != '/' {
+		return i
+	}
+	switch body[i+1] {
+	case '/':
+		j := i + 2
+		for j < len(body) && body[j] != '\n' {
+			j++
+		}
+		return j
+	case '*':
+		j := i + 2
+		for j+1 < len(body) && !(body[j] == '*' && body[j+1] == '/') {
+			j++
+		}
+		if j+2 > len(body) {
+			return len(body)
+		}
+		return j + 2
+	}
+	return i
 }
 
 // tagAttrs reads the current tag's name and attributes from the tokenizer.
@@ -246,6 +361,20 @@ func sortedKeys(m map[string]string) []string {
 
 func isCDNURL(v string) bool {
 	return strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://")
+}
+
+// isLocalURL reports whether v is a relative file path that should be treated
+// as a local lib import: "./x" or a bare "x" (or "sub/x"). It excludes
+// protocol-relative ("//host"), absolute paths ("/abs"), data: URIs, and
+// http(s) CDN URLs.
+func isLocalURL(v string) bool {
+	if v == "" || isCDNURL(v) {
+		return false
+	}
+	if strings.HasPrefix(v, "//") || strings.HasPrefix(v, "/") || strings.HasPrefix(v, "data:") {
+		return false
+	}
+	return true
 }
 
 // inferObject builds an object Schema from a hujson object, attaching each

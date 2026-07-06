@@ -8,11 +8,25 @@
 			rel="stylesheet"
 			href="https://cdn.jsdelivr.net/npm/open-props@1.7.0/open-props.min.css"
 		/>
-		<script
-			defer
-			src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"
-		></script>
 		<style>
+			:root {
+				color-scheme: light;
+				--radius: 0.625rem;
+				--background: oklch(1 0 0);
+				--foreground: oklch(0.145 0 0);
+				--card: oklch(1 0 0);
+				--card-foreground: oklch(0.145 0 0);
+				--muted: oklch(0.97 0 0);
+				--muted-foreground: oklch(0.556 0 0);
+				--border: oklch(0.922 0 0);
+			}
+
+			body {
+				font-family: "Nunito Sans", sans-serif;
+				background-color: var(--background);
+				color: var(--foreground);
+			}
+
 			.island-color {
 				width: var(--size-14);
 				font-family: var(--font-sans);
@@ -154,11 +168,11 @@
 			</div>
 		</div>
 
-		<!-- Data island — inert JSON. islandc replaces the body with
-		     json.Marshal(d) at serve time. Trailing // comments on
-		     properties become Go doc comments. -->
-		<script id="island-data" type="application/json">
-			{
+		<!-- Data island — executable assignment. The object literal is JWCC;
+		     islandc replaces it with json.Marshal(d) at serve time. Trailing
+		     // comments on properties become Go doc comments. -->
+		<script id="island-data">
+			const islandData = {
 				"h": 210, // hue 0..360
 				"s": 80, // saturation 0..100
 				"l": 55, // lightness 0..100
@@ -169,7 +183,7 @@
 					{ "name": "grape", "h": 270, "s": 65, "l": 55 },
 					{ "name": "gold", "h": 45, "s": 95, "l": 55 }
 				]
-			}
+			};
 		</script>
 
 		<!-- 3. Alpine component factory. alpine:init fires before Alpine walks
@@ -200,9 +214,8 @@
 			}
 
 		document.addEventListener("alpine:init", () => {
-			const data = JSON.parse(document.getElementById("island-data").textContent);
 			window.Alpine.data("colorPicker", () => ({
-				...data,
+				...islandData,
 					copied: false,
 					hex() {
 						return hslToHex(this.h, this.s, this.l);
@@ -221,4 +234,8 @@
 			});
 		</script>
 	</body>
+	<script
+			defer
+			src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"
+	></script>
 </html>
