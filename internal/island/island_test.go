@@ -96,6 +96,17 @@ func TestParse_promotesIntToNumberAcrossArrayElements(t *testing.T) {
 	}
 }
 
+func TestParse_emptyAndPopulatedSiblingArrays(t *testing.T) {
+	f, err := Parse("x.island.html", wrap(`{"rows":[{"tags":["a"]},{"tags":[]}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	tags := f.Schema.Properties["rows"].Items.Properties["tags"]
+	if tags.Type != "array" || tags.Items == nil || tags.Items.Type != "string" {
+		t.Errorf("tags: %+v", tags)
+	}
+}
+
 func TestParse_mixedArrayTypesIsError(t *testing.T) {
 	_, err := Parse("x.island.html", wrap(`{"vals":[1, "a"]}`))
 	if err == nil || !strings.Contains(err.Error(), "mixed array element types") {

@@ -440,6 +440,9 @@ func mergeSchema(a, b *Schema) (*Schema, error) {
 	if a == nil {
 		return b, nil
 	}
+	if b == nil {
+		return a, nil
+	}
 	if a.Type != b.Type {
 		if (a.Type == "number" && b.Type == "integer") || (a.Type == "integer" && b.Type == "number") {
 			return &Schema{Type: "number"}, nil
