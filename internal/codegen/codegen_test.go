@@ -767,6 +767,144 @@ func main() {
 	}
 }
 
+func mkExternalIsland(t *testing.T, name, srcAttr, jsonData string) *island.File {
+	t.Helper()
+	src := []byte(`<!DOCTYPE html><html><body>
+<script id="island-data" src="` + srcAttr + `"></script>
+</body></html>`)
+	f, err := island.Parse(name, src)
+	if err != nil {
+		t.Fatalf("Parse %s: %v", name, err)
+	}
+	if jsonData != "" {
+		if err := f.SetData([]byte(jsonData)); err != nil {
+			t.Fatalf("SetData %s: %v", name, err)
+		}
+	}
+	return f
+}
+
+func TestGenerate_externalDataSharing_e2e(t *testing.T) {
+	jwcc := `{"name": "Alice", "address": {"city": "Paris"}}`
+	card := mkExternalIsland(t, "card.island.html", "./user.json", jwcc)
+	profile := mkExternalIsland(t, "profile.island.html", "./user.json", jwcc)
+
+	out, err := Generate(Config{PackageName: "views", Files: []*island.File{card, profile}})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	s := string(out)
+	if n := strings.Count(s, "type UserData struct"); n != 1 {
+		t.Errorf("expected 1 UserData struct definition, got %d:\n%s", n, s)
+	}
+	if n := strings.Count(s, "type UserDataAddress struct"); n != 1 {
+		t.Errorf("expected 1 UserDataAddress struct definition, got %d:\n%s", n, s)
+	}
+	if !strings.Contains(s, "func RenderCard(w io.Writer, d UserData) error") {
+		t.Errorf("missing RenderCard:\n%s", s)
+	}
+	if !strings.Contains(s, "func RenderProfile(w io.Writer, d UserData) error") {
+		t.Errorf("missing RenderProfile:\n%s", s)
+	}
+
+	driver := `package main
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"gentest/views"
+)
+
+func main() {
+	var buf bytes.Buffer
+	err := views.RenderCard(&buf, views.UserData{
+		Name: "Alice",
+		Address: views.UserDataAddress{
+			City: "Paris",
+		},
+	})
+	if err != nil { fmt.Println("ERR", err); return }
+	out := buf.String()
+	wantScript := ` + "`" + `<script id="island-data">const islandData = {"address":{"city":"Paris"},"name":"Alice"};</script>` + "`" + `
+	if !strings.Contains(out, wantScript) {
+		fmt.Printf("slot missing expected script; got: %q\n", out)
+		return
+	}
+	if strings.Contains(out, "src=") {
+		fmt.Printf("src= leaked in rendered output: %q\n", out)
+		return
+	}
+	fmt.Println("OK")
+}
+`
+	dir := writeTempModule(t, []*island.File{card, profile}, out, driver)
+	if build := exec(t, dir, "go", "build", "./..."); build != "" {
+		t.Fatalf("go build failed:\n%s", build)
+	}
+	if got := exec(t, dir, "go", "run", "."); got != "OK\n" {
+		t.Fatalf("go run output = %q, want %q", got, "OK\n")
+	}
+}
+
+func TestGenerate_schemaClash(t *testing.T) {
+	t.Run("external clash", func(t *testing.T) {
+		f1 := mkExternalIsland(t, "card.island.html", "./user.json", `{"name": "Alice"}`)
+		f2 := mkExternalIsland(t, "profile.island.html", "./user.json", `{"name": "Alice", "age": 30}`)
+
+		_, err := Generate(Config{PackageName: "views", Files: []*island.File{f1, f2}})
+		if err == nil {
+			t.Fatal("expected Generate error for schema clash across external islands, got nil")
+		}
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "card.island.html") || !strings.Contains(errMsg, "profile.island.html") {
+			t.Errorf("expected error mentioning both paths, got: %v", errMsg)
+		}
+	})
+
+	t.Run("inline vs external clash", func(t *testing.T) {
+		inline := mkIsland(t, "user.island.html", `{"title": "Admin"}`)
+		ext := mkExternalIsland(t, "card.island.html", "./user.json", `{"name": "Alice"}`)
+
+		_, err := Generate(Config{PackageName: "views", Files: []*island.File{inline, ext}})
+		if err == nil {
+			t.Fatal("expected Generate error for inline-vs-external schema clash, got nil")
+		}
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "user.island.html") || !strings.Contains(errMsg, "card.island.html") {
+			t.Errorf("expected error mentioning both paths, got: %v", errMsg)
+		}
+	})
+}
+
+func TestGenerate_nilSchemaExternal(t *testing.T) {
+	f := mkExternalIsland(t, "card.island.html", "./user.json", "")
+
+	_, err := Generate(Config{PackageName: "views", Files: []*island.File{f}})
+	if err == nil {
+		t.Fatal("expected Generate error for external data island with nil schema, got nil")
+	}
+	want := "external data island card.island.html: no schema (data not loaded)"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("got error %q, want containing %q", err.Error(), want)
+	}
+}
+
+func TestGenerate_nestedAndRootTypeCollision(t *testing.T) {
+	foo := mkIsland(t, "foo.island.html", `{"barData": {"count": 1}}`)
+	fooDataBar := mkIsland(t, "foo-data-bar.island.html", `{"name": "hello"}`)
+
+	_, err := Generate(Config{PackageName: "views", Files: []*island.File{foo, fooDataBar}})
+	if err == nil {
+		t.Fatal("expected duplicate generated type error, got nil")
+	}
+	want := `duplicate generated type "FooDataBarData"`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("got error %q, want containing %q", err.Error(), want)
+	}
+}
+
 func exec(t *testing.T, dir string, name string, args ...string) string {
 	t.Helper()
 	cmd := osexec.Command(name, args...)

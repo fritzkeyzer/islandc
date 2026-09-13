@@ -98,3 +98,80 @@ func TestPlan_unresolvedDepsVerbatim(t *testing.T) {
 		t.Errorf("verbatim CDN tag missing from assembled output: %s", assembled)
 	}
 }
+
+func TestPlan_externalDataIsland(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<script id="island-data" src="./user.json"></script>
+</body></html>`)
+	f := mustParse(t, "x.island.html", src)
+	parts := Plan(f, nil)
+	if len(parts) != 3 {
+		t.Fatalf("got %d parts, want 3: %+v", len(parts), parts)
+	}
+	if parts[0].DepURL != "" || parts[0].Blob || parts[0].Src[1] != f.DataTagStart {
+		t.Errorf("part0 = %+v, want Src ending at DataTagStart (%d)", parts[0], f.DataTagStart)
+	}
+	if !parts[1].Blob {
+		t.Errorf("part1 = %+v, want Blob", parts[1])
+	}
+	if parts[2].DepURL != "" || parts[2].Blob || parts[2].Src[0] != f.DataTagEnd || parts[2].Src[1] != len(f.HTML) {
+		t.Errorf("part2 = %+v, want Src from DataTagEnd (%d) to end (%d)", parts[2], f.DataTagEnd, len(f.HTML))
+	}
+
+	var assembledSrc []byte
+	for _, p := range parts {
+		if !p.Blob && p.DepURL == "" {
+			assembledSrc = append(assembledSrc, f.HTML[p.Src[0]:p.Src[1]]...)
+		}
+	}
+	if bytes.Contains(assembledSrc, []byte("src=")) || bytes.Contains(assembledSrc, []byte("./user.json")) {
+		t.Errorf("reassembled Src parts must not contain src attribute; got %s", assembledSrc)
+	}
+	if bytes.Contains(assembledSrc, []byte("island-data")) {
+		t.Errorf("reassembled Src parts must not contain external script tag; got %s", assembledSrc)
+	}
+}
+
+func TestPlan_externalWithResolvedDep(t *testing.T) {
+	cssURL := "https://cdn.example.com/a.css"
+	jsURL := "https://cdn.example.com/b.js"
+	src := []byte(`<!DOCTYPE html><html><body>
+<link rel="stylesheet" href="` + cssURL + `" />
+<script id="island-data" src="./user.json"></script>
+<script src="` + jsURL + `" defer></script>
+</body></html>`)
+	f := mustParse(t, "x.island.html", src)
+	resolved := map[string]string{cssURL: "a.css", jsURL: "b.js"}
+	parts := Plan(f, resolved)
+
+	var got []string
+	for _, p := range parts {
+		switch {
+		case p.Blob:
+			got = append(got, "blob")
+		case p.DepURL != "":
+			got = append(got, "dep:"+p.DepURL)
+		default:
+			got = append(got, "src")
+		}
+	}
+	want := []string{"src", "dep:" + cssURL, "src", "blob", "src", "dep:" + jsURL, "src"}
+	if len(got) != len(want) {
+		t.Fatalf("parts = %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("part %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	var assembledSrc []byte
+	for _, p := range parts {
+		if !p.Blob && p.DepURL == "" {
+			assembledSrc = append(assembledSrc, f.HTML[p.Src[0]:p.Src[1]]...)
+		}
+	}
+	if bytes.Contains(assembledSrc, []byte("./user.json")) {
+		t.Errorf("reassembled Src parts must not contain src attribute; got %s", assembledSrc)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"reflect"
 	"sort"
 	"unicode"
 
@@ -44,6 +45,20 @@ func Generate(cfg Config) ([]byte, error) {
 	copy(files, cfg.Files)
 	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
 
+	byDataType := map[string]*island.File{}
+	for _, f := range files {
+		if f.Schema == nil {
+			return nil, fmt.Errorf("external data island %s: no schema (data not loaded)", f.Path)
+		}
+		if prev, ok := byDataType[f.DataTypeName]; ok {
+			if !reflect.DeepEqual(prev.Schema, f.Schema) {
+				return nil, fmt.Errorf("schema mismatch for %q between %s and %s", f.DataTypeName, prev.Path, f.Path)
+			}
+		} else {
+			byDataType[f.DataTypeName] = f
+		}
+	}
+
 	deps, err := collectDeps(cfg, files)
 	if err != nil {
 		return nil, err
@@ -69,8 +84,9 @@ func Generate(cfg Config) ([]byte, error) {
 	emitDeps(&b, deps)
 
 	seen := map[string]bool{}
+	emittedRoots := map[string]bool{}
 	for _, f := range files {
-		if err := emitIsland(&b, f, deps.varOf, seen); err != nil {
+		if err := emitIsland(&b, f, deps.varOf, seen, emittedRoots); err != nil {
 			return nil, fmt.Errorf("codegen %s: %w", f.Path, err)
 		}
 	}
@@ -173,21 +189,26 @@ func emitDeps(b *bytes.Buffer, d *depSet) {
 }
 
 // emitIsland writes one island's struct, embedded HTML, and Render function.
-func emitIsland(b *bytes.Buffer, f *island.File, depVar map[string]string, seen map[string]bool) error {
-	dataName := f.Name + "Data"
-	if seen[dataName] {
-		return fmt.Errorf("duplicate generated type %q (from %s)", dataName, f.Path)
-	}
-	if err := emitStruct(b, dataName, f.Schema, seen, f.Name); err != nil {
-		return err
+func emitIsland(b *bytes.Buffer, f *island.File, depVar map[string]string, seen map[string]bool, emittedRoots map[string]bool) error {
+	dataName := f.DataTypeName
+	if !emittedRoots[dataName] {
+		if err := emitStruct(b, dataName, f.Schema, seen, f.Name); err != nil {
+			return err
+		}
+		emittedRoots[dataName] = true
 	}
 
 	htmlVar := unexportName(f.Name) + "HTML"
 	fmt.Fprintf(b, "//go:embed %s\n", f.Path)
 	fmt.Fprintf(b, "var %s []byte\n\n", htmlVar)
 
-	fmt.Fprintf(b, "// %s writes the %s island HTML with the data island's object\n", f.RenderFunc, f.Name)
-	fmt.Fprintf(b, "// literal replaced by json.Marshal(d).\n")
+	if f.DataSrc != "" {
+		fmt.Fprintf(b, "// %s writes the %s island HTML with the external data script\n", f.RenderFunc, f.Name)
+		fmt.Fprintf(b, "// tag replaced by an inline data script containing json.Marshal(d).\n")
+	} else {
+		fmt.Fprintf(b, "// %s writes the %s island HTML with the data island's object\n", f.RenderFunc, f.Name)
+		fmt.Fprintf(b, "// literal replaced by json.Marshal(d).\n")
+	}
 	fmt.Fprintf(b, "func %s(w io.Writer, d %s) error {\n", f.RenderFunc, dataName)
 	fmt.Fprintf(b, "\tblob, err := json.Marshal(d)\n")
 	fmt.Fprintf(b, "\tif err != nil {\n\t\treturn err\n\t}\n")
@@ -209,7 +230,15 @@ func renderParts(f *island.File, depVar map[string]string, htmlVar string) []str
 	for _, p := range parts.Plan(f, depVar) {
 		switch {
 		case p.Blob:
-			exprs = append(exprs, "blob")
+			if f.DataSrc != "" {
+				exprs = append(exprs,
+					`[]byte("<script id=\"island-data\">const islandData = ")`,
+					"blob",
+					`[]byte(";</script>")`,
+				)
+			} else {
+				exprs = append(exprs, "blob")
+			}
 		case p.DepURL != "":
 			v, ok := depVar[p.DepURL]
 			if !ok {

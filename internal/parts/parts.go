@@ -1,7 +1,7 @@
 // Package parts computes the cut/inset plan for one island's render
 // function: an ordered list of parts that, when concatenated, produces the
 // island's HTML with CDN lib imports spliced in and the data island's object
-// literal replaced by the marshaled data blob.
+// literal (or whole external script tag) replaced by the marshaled data blob.
 //
 // The plan is pure data — no Go-source emission, no file I/O — so both the
 // codegen emitter and the audit hermeticity checker can share it.
@@ -33,7 +33,8 @@ type Part struct {
 	// non-Dep parts.
 	ScriptOpenTag string
 
-	// Blob is true for the data island's object literal placeholder —
+	// Blob is true for the data island's placeholder (object literal for
+	// inline data, or the whole script tag for external data) —
 	// emitted at render time as json.Marshal(d).
 	Blob bool
 }
@@ -41,7 +42,10 @@ type Part struct {
 // Plan computes the ordered parts for one island's render function: slices
 // of the pristine source HTML interleaved with resolved dep content (first
 // occurrence inlined, duplicates dropped, unresolved deps verbatim) and the
-// marshaled data blob at the data island slot.
+// marshaled data blob at the data island slot. For external data islands
+// (f.DataSrc != ""), the Blob edit replaces the whole script tag
+// [f.DataTagStart, f.DataTagEnd); for inline data, it replaces the object
+// literal [f.DataOpen, f.DataClose).
 //
 // resolved maps a dep URL (CDN or local) to its vendored/embed filename.
 // Any URL present is "resolved — splice it in"; URLs absent from the map
@@ -65,7 +69,11 @@ func Plan(f *island.File, resolved map[string]string) []Part {
 		}
 		edits = append(edits, e)
 	}
-	edits = append(edits, edit{start: f.DataOpen, end: f.DataClose, part: &Part{Blob: true}})
+	blobStart, blobEnd := f.DataOpen, f.DataClose
+	if f.DataSrc != "" {
+		blobStart, blobEnd = f.DataTagStart, f.DataTagEnd
+	}
+	edits = append(edits, edit{start: blobStart, end: blobEnd, part: &Part{Blob: true}})
 	sort.Slice(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
 
 	var parts []Part
