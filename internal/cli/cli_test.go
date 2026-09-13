@@ -313,3 +313,96 @@ func TestRun_strict(t *testing.T) {
 		t.Errorf("non-strict + external URL: exit=%d, want 0; stderr=%s", code, errw.String())
 	}
 }
+
+func TestRun_externalData(t *testing.T) {
+	root := projectRoot(t)
+	readFixture := func(name string) []byte {
+		b, err := os.ReadFile(filepath.Join(root, "testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	sharedA := readFixture("shared_a.island.html")
+	sharedB := readFixture("shared_b.island.html")
+	sharedJSON := readFixture("shared_data.json")
+
+	// (a) Happy path: exit 0, deduped struct, both render funcs, JSON not embedded.
+	t.Run("happy", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "shared_a.island.html"), sharedA, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "shared_b.island.html"), sharedB, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "shared_data.json"), sharedJSON, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var out, errw bytes.Buffer
+		if code := Run([]string{dir}, &out, &errw); code != 0 {
+			t.Fatalf("exit=%d, want 0; stderr=%s", code, errw.String())
+		}
+		gen, err := os.ReadFile(filepath.Join(dir, "islandc.gen.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(gen)
+		if n := strings.Count(s, "type SharedDataData struct"); n != 1 {
+			t.Errorf("type SharedDataData count = %d, want 1", n)
+		}
+		if !strings.Contains(s, "func RenderSharedA(") {
+			t.Errorf("generated file missing RenderSharedA:\n%s", s)
+		}
+		if !strings.Contains(s, "func RenderSharedB(") {
+			t.Errorf("generated file missing RenderSharedB:\n%s", s)
+		}
+		if strings.Contains(s, "go:embed shared_data.json") {
+			t.Errorf("generated file must not embed shared_data.json:\n%s", s)
+		}
+	})
+
+	// (b) JSON file absent: exit 1, stderr contains island filename and shared_data.json.
+	t.Run("missing JSON", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "shared_a.island.html"), sharedA, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var out, errw bytes.Buffer
+		if code := Run([]string{dir}, &out, &errw); code != 1 {
+			t.Fatalf("exit=%d, want 1; stderr=%s", code, errw.String())
+		}
+		errStr := errw.String()
+		if !strings.Contains(errStr, "shared_a.island.html") {
+			t.Errorf("stderr missing island filename %q: %s", "shared_a.island.html", errStr)
+		}
+		if !strings.Contains(errStr, "shared_data.json") {
+			t.Errorf("stderr missing JSON filename %q: %s", "shared_data.json", errStr)
+		}
+	})
+
+	// (c) shared_data.json with invalid JWCC: exit 1, stderr mentions island file and JSON path.
+	t.Run("invalid JWCC", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "shared_a.island.html"), sharedA, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "shared_data.json"), []byte("{not json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var out, errw bytes.Buffer
+		if code := Run([]string{dir}, &out, &errw); code != 1 {
+			t.Fatalf("exit=%d, want 1; stderr=%s", code, errw.String())
+		}
+		errStr := errw.String()
+		if !strings.Contains(errStr, "shared_a.island.html") {
+			t.Errorf("stderr missing island filename %q: %s", "shared_a.island.html", errStr)
+		}
+		if !strings.Contains(errStr, "shared_data.json") {
+			t.Errorf("stderr missing JSON filename/path %q: %s", "shared_data.json", errStr)
+		}
+	})
+}

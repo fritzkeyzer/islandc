@@ -33,6 +33,21 @@ Rules:
 - `json.Marshal` HTML-escapes `<`, `>`, and `&`, so rendered data cannot contain `</script>`.
 - Strict CSP: the data island is an inline script, so `script-src` must allow it.
 
+### External data
+
+When multiple islands share the same schema, data can be referenced from an external file:
+
+```html
+<script id="island-data" src="./shared_data.json"></script>
+```
+
+- **Tag form**: `<script id="island-data" src="./file.json"></script>`. Must have an empty body and no `type` attribute.
+- **Path resolution**: `src` must be a local relative path (`./x` or bare `sub/x` — not `http(s)`, `//`, `/abs`, or `data:`), resolved against the island file's directory.
+- **JWCC format**: The JSON file is JWCC (comments and trailing commas allowed), must be a non-empty object literal, and is dev-time schema input only — it is never embedded in the generated Go file.
+- **Tag replacement**: At render time, `islandc` replaces the whole script tag with `<script id="island-data">const islandData = <json.Marshal(d)>;</script>`.
+- **Shared struct naming**: The struct type name derives from the JSON filename PascalCased + `Data` (e.g. `shared_data.json` → `SharedDataData`). Islands referencing the same JSON file share a single struct definition. Referencing different schemas under the same derived type name is a build error.
+- **Error semantics**: Missing or invalid JSON fails the build immediately, even without `--strict`.
+
 Everything else — mount elements, client scripts, styles — is userspace.
 
 ## Schema inference

@@ -286,6 +286,17 @@ func parseDir(dir string) ([]*island.File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
+		if f.DataSrc != "" {
+			rel := strings.TrimPrefix(f.DataSrc, "./")
+			jsonPath := filepath.Join(dir, rel)
+			data, err := os.ReadFile(jsonPath)
+			if err != nil {
+				return nil, fmt.Errorf("%s: read data file %s: %w", e.Name(), jsonPath, err)
+			}
+			if err := f.SetData(data); err != nil {
+				return nil, fmt.Errorf("%s: %w", jsonPath, err)
+			}
+		}
 		files = append(files, f)
 	}
 	return files, nil

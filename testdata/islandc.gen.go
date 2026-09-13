@@ -145,6 +145,50 @@ func RenderProfile(w io.Writer, d ProfileData) error {
 	)
 }
 
+type SharedDataData struct {
+	Count int `json:"count"`
+	// Title component heading
+	Title string `json:"title"`
+}
+
+//go:embed shared_a.island.html
+var sharedAHTML []byte
+
+// RenderSharedA writes the SharedA island HTML with the external data script
+// tag replaced by an inline data script containing json.Marshal(d).
+func RenderSharedA(w io.Writer, d SharedDataData) error {
+	blob, err := json.Marshal(d)
+	if err != nil {
+		return err
+	}
+	return writeParts(w,
+		sharedAHTML[0:146],
+		[]byte("<script id=\"island-data\">const islandData = "),
+		blob,
+		[]byte(";</script>"),
+		sharedAHTML[205:],
+	)
+}
+
+//go:embed shared_b.island.html
+var sharedBHTML []byte
+
+// RenderSharedB writes the SharedB island HTML with the external data script
+// tag replaced by an inline data script containing json.Marshal(d).
+func RenderSharedB(w io.Writer, d SharedDataData) error {
+	blob, err := json.Marshal(d)
+	if err != nil {
+		return err
+	}
+	return writeParts(w,
+		sharedBHTML[0:146],
+		[]byte("<script id=\"island-data\">const islandData = "),
+		blob,
+		[]byte(";</script>"),
+		sharedBHTML[205:],
+	)
+}
+
 type TodoListData struct {
 	Items []TodoListDataItems `json:"items"`
 	Title string              `json:"title"`

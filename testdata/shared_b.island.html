@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>Shared B</title>
+	</head>
+	<body>
+		<div id="shared-b-root"></div>
+		<script id="island-data" src="./shared_data.json"></script>
+		<script type="module">
+			const data = islandData;
+			const root = document.getElementById("shared-b-root");
+			root.innerHTML = `<div><span>${data.title}</span>: <strong>${data.count}</strong></div>`;
+		</script>
+	</body>
+</html>
