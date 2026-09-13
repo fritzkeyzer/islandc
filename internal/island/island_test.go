@@ -391,3 +391,170 @@ func TestParse_ignoresURLsInsideScriptContent(t *testing.T) {
 		t.Errorf("got %d deps, want 0 (tags inside script raw text are not deps): %+v", len(f.Deps), f.Deps)
 	}
 }
+
+func TestParse_externalDataRef(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<script id="island-data" src="./profile.json"></script>
+</body></html>`)
+	f, err := Parse("profile.island.html", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if f.Name != "Profile" || f.RenderFunc != "RenderProfile" {
+		t.Errorf("Name/RenderFunc = %q/%q", f.Name, f.RenderFunc)
+	}
+	if f.DataSrc != "./profile.json" {
+		t.Errorf("DataSrc = %q, want %q", f.DataSrc, "./profile.json")
+	}
+	if f.DataTypeName != "ProfileData" {
+		t.Errorf("DataTypeName = %q, want %q", f.DataTypeName, "ProfileData")
+	}
+	if f.Schema != nil {
+		t.Errorf("Schema before SetData = %+v, want nil", f.Schema)
+	}
+	if f.DataOpen != 0 || f.DataClose != 0 {
+		t.Errorf("DataOpen/DataClose = %d/%d, want 0/0", f.DataOpen, f.DataClose)
+	}
+	tag := string(src[f.DataTagStart:f.DataTagEnd])
+	if tag != `<script id="island-data" src="./profile.json"></script>` {
+		t.Errorf("DataTag = %q", tag)
+	}
+
+	dataSrc := []byte(`{
+		"name": "Ada",
+		"age": 36 // user age
+	}`)
+	if err := f.SetData(dataSrc); err != nil {
+		t.Fatalf("SetData: %v", err)
+	}
+	if f.Schema == nil || f.Schema.Type != "object" {
+		t.Fatalf("Schema after SetData = %+v", f.Schema)
+	}
+	if f.Schema.Properties["name"].Type != "string" {
+		t.Errorf("name type = %q, want string", f.Schema.Properties["name"].Type)
+	}
+	if f.Schema.Properties["age"].Type != "integer" || f.Schema.Properties["age"].Comment != "user age" {
+		t.Errorf("age = %+v", f.Schema.Properties["age"])
+	}
+}
+
+func TestParse_externalDataWithWhitespaceBody(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body>
+<script id="island-data" src="./user_stats.json">
+
+</script>
+</body></html>`)
+	f, err := Parse("card.island.html", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if f.DataSrc != "./user_stats.json" {
+		t.Errorf("DataSrc = %q", f.DataSrc)
+	}
+	if f.DataTypeName != "UserStatsData" {
+		t.Errorf("DataTypeName = %q, want UserStatsData", f.DataTypeName)
+	}
+	tag := string(src[f.DataTagStart:f.DataTagEnd])
+	if !strings.HasPrefix(tag, `<script id="island-data" src="./user_stats.json">`) || !strings.HasSuffix(tag, "</script>") {
+		t.Errorf("tag = %q", tag)
+	}
+}
+
+func TestParse_externalDataInvalidSrc(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"empty", `src=""`},
+		{"bare-src", `src`},
+		{"https", `src="https://example.com/data.json"`},
+		{"http", `src="http://example.com/data.json"`},
+		{"abs", `src="/data.json"`},
+		{"proto-relative", `src="//example.com/data.json"`},
+		{"data-uri", `src="data:application/json,{}"`},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			html := `<!DOCTYPE html><html><body><script id="island-data" ` + c.src + `></script></body></html>`
+			_, err := Parse("x.island.html", []byte(html))
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", c.name)
+			}
+			if !strings.Contains(err.Error(), "must be a local relative path") {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestParse_externalDataNonEmptyBodyIsError(t *testing.T) {
+	bodies := []string{
+		`const islandData = {};`,
+		`{}`,
+		`123`,
+		`// comment`,
+		`/* comment */`,
+		`hello`,
+	}
+	for _, body := range bodies {
+		html := `<!DOCTYPE html><html><body><script id="island-data" src="./x.json">` + body + `</script></body></html>`
+		_, err := Parse("x.island.html", []byte(html))
+		if err == nil {
+			t.Fatalf("expected error for non-empty body %q, got nil", body)
+		}
+		if !strings.Contains(err.Error(), "empty body") {
+			t.Errorf("unexpected error for %q: %v", body, err)
+		}
+	}
+}
+
+func TestParse_externalDataTypeAttributeIsError(t *testing.T) {
+	src := []byte(`<!DOCTYPE html><html><body><script id="island-data" src="./x.json" type="application/json"></script></body></html>`)
+	_, err := Parse("x.island.html", src)
+	if err == nil {
+		t.Fatal("expected error for type attribute on external island-data, got nil")
+	}
+	if !strings.Contains(err.Error(), "must not have a type attribute") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSetData_errors(t *testing.T) {
+	f := &File{Path: "x.island.html"}
+	cases := []struct {
+		name string
+		json string
+	}{
+		{"invalid-jwcc", `{not json}`},
+		{"non-object-array", `[1, 2, 3]`},
+		{"non-object-string", `"hello"`},
+		{"non-object-int", `42`},
+		{"empty-object", `{}`},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			err := f.SetData([]byte(c.json))
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", c.name)
+			}
+		})
+	}
+}
+
+func TestParse_inlineDataTypeName(t *testing.T) {
+	f, err := Parse("user_card.island.html", wrap(`{"name":"test"}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if f.DataTypeName != "UserCardData" {
+		t.Errorf("DataTypeName = %q, want %q", f.DataTypeName, "UserCardData")
+	}
+	if f.DataSrc != "" {
+		t.Errorf("DataSrc = %q, want empty", f.DataSrc)
+	}
+	if f.DataTagStart != 0 || f.DataTagEnd != 0 {
+		t.Errorf("DataTagStart/End = %d/%d, want 0/0", f.DataTagStart, f.DataTagEnd)
+	}
+}

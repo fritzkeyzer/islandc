@@ -34,7 +34,17 @@ type File struct {
 	// object literal within HTML ('{' inclusive to just past '}'). The
 	// generated code replaces the literal with json.Marshal(data) at serve
 	// time; the surrounding assignment prefix/suffix ship verbatim.
+	// For external data files (DataSrc != ""), DataOpen and DataClose are 0.
 	DataOpen, DataClose int
+	// DataSrc is the relative path from the <script id="island-data" src="...">
+	// attribute when data is loaded from an external file, or empty for inline data.
+	DataSrc string
+	// DataTagStart and DataTagEnd delimit the whole <script ...>...</script>
+	// tag within HTML when DataSrc is set (external data mode). Zero for inline data.
+	DataTagStart, DataTagEnd int
+	// DataTypeName is the Go struct type name for the island data:
+	// deriveName(DataSrc)+"Data" when external, Name+"Data" when inline.
+	DataTypeName string
 	// Deps are the CDN lib imports found in the file, in document order.
 	Deps []DepRef
 }
@@ -87,6 +97,21 @@ func Parse(filePath string, src []byte) (*File, error) {
 		return nil, fmt.Errorf("%s: data island not found (need <script id=\"island-data\"> with body `const islandData = { ... };`)", filePath)
 	}
 
+	if doc.dataSrc != "" {
+		return &File{
+			Path:         filePath,
+			Name:         name,
+			RenderFunc:   "Render" + name,
+			HTML:         src,
+			Schema:       nil,
+			DataSrc:      doc.dataSrc,
+			DataTagStart: doc.dataTagStart,
+			DataTagEnd:   doc.dataTagEnd,
+			DataTypeName: deriveName(doc.dataSrc) + "Data",
+			Deps:         doc.deps,
+		}, nil
+	}
+
 	litOpen, litClose, err := findObjectLiteral(src[doc.dataOpen:doc.dataClose])
 	if err != nil {
 		return nil, fmt.Errorf("%s: island-data: %w", filePath, err)
@@ -111,20 +136,50 @@ func Parse(filePath string, src []byte) (*File, error) {
 	}
 
 	return &File{
-		Path:       filePath,
-		Name:       name,
-		RenderFunc: "Render" + name,
-		HTML:       src,
-		Schema:     schema,
-		DataOpen:   dataOpen,
-		DataClose:  dataClose,
-		Deps:       doc.deps,
+		Path:         filePath,
+		Name:         name,
+		RenderFunc:   "Render" + name,
+		HTML:         src,
+		Schema:       schema,
+		DataOpen:     dataOpen,
+		DataClose:    dataClose,
+		DataTypeName: name + "Data",
+		Deps:         doc.deps,
 	}, nil
+}
+
+// SetData parses external JSON/JWCC data and populates Schema.
+// It expects a bare JSON object literal (not wrapped in an assignment statement).
+func (f *File) SetData(jsonSrc []byte) error {
+	prefix := ""
+	if f.Path != "" {
+		prefix = f.Path + ": "
+	}
+	v, err := hujson.Parse(jsonSrc)
+	if err != nil {
+		return fmt.Errorf("%sdata is not valid JWCC: %w", prefix, err)
+	}
+	obj, ok := v.Value.(*hujson.Object)
+	if !ok {
+		return fmt.Errorf("%sdata must be a JSON object literal", prefix)
+	}
+	if len(obj.Members) == 0 {
+		return fmt.Errorf("%sdata object is empty", prefix)
+	}
+	schema, err := inferObject(obj)
+	if err != nil {
+		return fmt.Errorf("%sdata: %w", prefix, err)
+	}
+	f.Schema = schema
+	return nil
 }
 
 // doc holds the results of one tokenizer pass over the HTML.
 type doc struct {
 	foundData           bool
+	dataSrc             string
+	dataTagStart        int
+	dataTagEnd          int
 	dataOpen, dataClose int
 	deps                []DepRef
 }
@@ -136,6 +191,7 @@ type pendingScript struct {
 	tagStart int    // start of the <script ...> tag
 	openEnd  int    // just past the opening tag
 	isData   bool   // id="island-data"
+	dataSrc  string // src attribute on island-data script
 	srcURL   string // http(s) or local src, if any
 	local    bool   // srcURL is a local file path
 	openTag  string // rebuilt open tag without src (for dep inlining)
@@ -194,6 +250,12 @@ func scan(src []byte) (*doc, error) {
 					if t, ok := attrs["type"]; ok {
 						return nil, fmt.Errorf("island-data script must not have a type attribute (got type=%q); the body is an executable assignment `const islandData = { ... };`", t)
 					}
+					if src, ok := attrs["src"]; ok {
+						if !isLocalURL(src) {
+							return nil, fmt.Errorf("island-data src must be a local relative path (got %q)", src)
+						}
+						script.dataSrc = src
+					}
 					script.isData = true
 				} else {
 					src := attrs["src"]
@@ -216,8 +278,18 @@ func scan(src []byte) (*doc, error) {
 			}
 			if script.isData {
 				d.foundData = true
-				d.dataOpen = script.openEnd
-				d.dataClose = start
+				if script.dataSrc != "" {
+					body := src[script.openEnd:start]
+					if len(bytes.TrimSpace(body)) > 0 {
+						return nil, fmt.Errorf("island-data script with src attribute must have an empty body")
+					}
+					d.dataSrc = script.dataSrc
+					d.dataTagStart = script.tagStart
+					d.dataTagEnd = offset
+				} else {
+					d.dataOpen = script.openEnd
+					d.dataClose = start
+				}
 			} else if script.srcURL != "" {
 				d.deps = append(d.deps, DepRef{
 					URL: script.srcURL, Kind: DepJS, Local: script.local,
