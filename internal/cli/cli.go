@@ -38,6 +38,8 @@ func Run(args []string, out, errw io.Writer) int {
 	outName := fs.String("out", "islandc.gen.go", "name of the generated Go file")
 	recursive := fs.Bool("r", false, "recurse into subdirectories; one .go file per dir")
 	resolveDeps := fs.Bool("resolve-deps", false, "download CDN deps into <target>/islandc.deps/ and embed them")
+	prune := fs.Bool("prune", false, "delete cached deps no longer referenced (default on with -resolve-deps)")
+	noPrune := fs.Bool("no-prune", false, "keep unreferenced cached deps when using -resolve-deps")
 	strict := fs.Bool("strict", false, "fail if any external URL survives into the generated output")
 	quiet := fs.Bool("q", false, "suppress progress output")
 	showHelp := fs.Bool("help", false, "print the README")
@@ -82,9 +84,11 @@ func Run(args []string, out, errw io.Writer) int {
 		return 1
 	}
 
+	doPrune := (*prune || *resolveDeps) && !*noPrune
+
 	var hadError bool
 	for _, dir := range dirs {
-		if err := generateDir(dir, *pkgName, *outName, *resolveDeps, *strict, *quiet, out, errw); err != nil {
+		if err := generateDir(dir, *pkgName, *outName, *resolveDeps, doPrune, *strict, *quiet, out, errw); err != nil {
 			fmt.Fprintf(errw, "islandc: %s: %v\n", dir, err)
 			hadError = true
 		}
@@ -163,7 +167,7 @@ func dirHasIslands(dir string) (bool, error) {
 	return false, nil
 }
 
-func generateDir(dir, pkgName, outName string, resolveDeps, strict, quiet bool, out, errw io.Writer) error {
+func generateDir(dir, pkgName, outName string, resolveDeps, prune, strict, quiet bool, out, errw io.Writer) error {
 	files, err := parseDir(dir)
 	if err != nil {
 		return err
@@ -178,6 +182,16 @@ func generateDir(dir, pkgName, outName string, resolveDeps, strict, quiet bool, 
 	resolved, err := resolveCDNDeps(dir, files, resolveDeps, quiet, out, errw)
 	if err != nil {
 		return err
+	}
+	if prune {
+		urls, _ := collectDepURLs(files)
+		removed, err := deps.Prune(dir, urls)
+		if err != nil {
+			return err
+		}
+		if !quiet && len(removed) > 0 {
+			fmt.Fprintf(out, "islandc: %s: pruned %d unused dep file(s)\n", dir, len(removed))
+		}
 	}
 
 	// Local file deps are always-on: stat each and add the existing ones to

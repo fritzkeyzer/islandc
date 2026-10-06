@@ -29,6 +29,8 @@ islandc -pkg views -r ./web  # recurse, custom package name
 | `-out`          | `islandc.gen.go` | Generated file name                                |
 | `-r`            | off              | Recurse into subdirectories; one `.go` file per dir |
 | `-resolve-deps` | off              | Download CDN deps into `<target>/islandc.deps/` and embed them |
+| `-prune`        | on with `-resolve-deps` | Delete cached deps (files + manifest entries) no longer referenced |
+| `-no-prune`     | off              | Keep unreferenced cached deps                      |
 | `-strict`       | off              | Fail if any external URL survives into the output  |
 | `-q`            | off              | Suppress progress output                           |
 

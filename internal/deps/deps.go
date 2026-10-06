@@ -204,6 +204,49 @@ func (r *Resolver) Resolve(targetDir string, urls []string, kindOf map[string]st
 	return res, nil
 }
 
+// Prune drops manifest entries whose URL is not in urls and deletes every
+// file in targetDir/CacheDir not referenced by a kept entry. Returns the
+// removed filenames. A missing cache dir is a no-op.
+func Prune(targetDir string, urls []string) ([]string, error) {
+	dir := filepath.Join(targetDir, CacheDir)
+	dirEntries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("deps: read cache dir %s: %w", dir, err)
+	}
+	man, err := loadManifest(dir)
+	if err != nil {
+		return nil, err
+	}
+	used := map[string]bool{}
+	for _, u := range urls {
+		used[u] = true
+	}
+	keep := map[string]bool{ManifestName: true}
+	kept := man.Entries[:0]
+	for _, e := range man.Entries {
+		if used[e.URL] {
+			kept = append(kept, e)
+			keep[e.File] = true
+		}
+	}
+	man.Entries = kept
+
+	var removed []string
+	for _, de := range dirEntries {
+		if de.IsDir() || keep[de.Name()] {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, de.Name())); err != nil {
+			return removed, fmt.Errorf("deps: prune %s: %w", de.Name(), err)
+		}
+		removed = append(removed, de.Name())
+	}
+	return removed, saveManifest(dir, man)
+}
+
 // download fetches u and writes its body to a file named by the SHA-256 of
 // the URL, with an extension derived from kind. For CSS, the body is first
 // rewritten so every url()/@import sub-resource is inlined as a data URI.

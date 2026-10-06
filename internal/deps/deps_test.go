@@ -145,3 +145,36 @@ func TestResolver_default_rejectsNon200(t *testing.T) {
 		t.Errorf("missing = %+v, want the 404 URL (error pages must never be vendored)", res.Missing)
 	}
 }
+
+func TestPrune_dropsUnusedEntriesAndStrayFiles(t *testing.T) {
+	target := t.TempDir()
+	dir := filepath.Join(target, CacheDir)
+	os.MkdirAll(dir, 0o755)
+	for _, f := range []string{"keep.js", "drop.css", "stray.js.tmp"} {
+		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644)
+	}
+	saveManifest(dir, &Manifest{Entries: []Entry{
+		{URL: "https://a/keep.js", File: "keep.js"},
+		{URL: "https://a/drop.css", File: "drop.css"},
+	}})
+
+	removed, err := Prune(target, []string{"https://a/keep.js"})
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if strings.Join(removed, ",") != "drop.css,stray.js.tmp" {
+		t.Errorf("removed = %v", removed)
+	}
+	man, _ := loadManifest(dir)
+	if len(man.Entries) != 1 || man.Entries[0].File != "keep.js" {
+		t.Errorf("manifest = %+v", man.Entries)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "keep.js")); err != nil {
+		t.Errorf("keep.js gone: %v", err)
+	}
+
+	// Missing cache dir is a no-op.
+	if _, err := Prune(t.TempDir(), nil); err != nil {
+		t.Errorf("Prune on empty target: %v", err)
+	}
+}
